@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wettersonde Web Interface</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page wrap">
+    <section class="hero" id="dashboard">
+      <div class="hero-title-wrap">
+        <h1 class="hero-title"><img src="ballon.png" height="25px" style="padding-right:10px;"> Wettersonde Web Interface</h1>
+        <div class="hero-subtitle">wettersonde.net - Monitoring, scan and decoder status</div>
+        <div class="muted small" id="path"></div>
+      </div>
+      <div class="row controls">
+        <button class="primary" data-action="start">Start</button>
+        <button class="danger" data-action="stop">Stop</button>
+        <button data-action="restart">Restart</button>
+        <button id="refreshBtn">Refresh</button>
+      </div>
+    </section>
+
+    <section class="status-grid">
+      <article class="info-card">
+        <div class="label">Status</div>
+        <div class="value" id="running">...</div>
+      </article>
+      <article class="info-card">
+        <div class="label">PID</div>
+        <div class="value" id="pid">...</div>
+      </article>
+      <article class="info-card info-card-wide">
+        <div class="label">Active Channels</div>
+        <div class="value" id="channelCount">...</div>
+        <div class="channels small" id="channels"></div>
+      </article>
+      <article class="info-card">
+        <div class="label">Last Update</div>
+        <div class="value small" id="updated">...</div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <section class="panel spectrum-panel" id="spectrumSection">
+        <h2>Scanner</h2>
+        <div class="panel-subtitle">Spectrum / scan peaks</div>
+        <div class="muted small" id="spectrumInfo">Last scan: -</div>
+        <canvas id="spectrumCanvas"></canvas>
+      </section>
+
+
+    </section>
+
+    <section class="detail-section" id="tabsSection">
+      <h2>Details</h2>
+      <nav class="tabs">
+        <button class="tab active" data-tab="log">Live Log</button>
+        <button class="tab" data-tab="config">Config</button>
+        <button class="tab" data-tab="offsets">Offset Cache</button>
+        <button class="tab" data-tab="radiosondes">Radiosondes</button>
+        <button class="tab" data-tab="rawstatus">Raw Status</button>
+      </nav>
+
+      <section id="log" class="pane active"><pre id="logText">loading...</pre></section>
+      <section id="config" class="pane"><pre id="configText">loading...</pre></section>
+      <section id="offsets" class="pane"><pre id="offsetText">loading...</pre></section>
+      <section id="radiosondes" class="pane">
+        <div class="table-wrap">
+          <table class="sonde-table">
+            <thead>
+              <tr>
+                <th>Serial</th>
+                <th>Type</th>
+                <th>First altitude</th>
+                <th>Last altitude</th>
+                <th>Frames</th>
+                <th>Last frame</th>
+              </tr>
+            </thead>
+            <tbody id="radiosondeRows">
+              <tr><td colspan="6">loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="rawstatus" class="pane"><pre id="statusText">loading...</pre></section>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
