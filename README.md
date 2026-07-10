@@ -33,7 +33,9 @@ make
 
 ### Configuring wsrx
 
+```
 nano /home/pi/wsrx/config.ini
+```
 
 Change your call sign and your coordinates. The call sign does not have to be an amateur radio call sign.
 
