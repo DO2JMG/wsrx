@@ -35,7 +35,7 @@ static std::atomic<bool> g_shutdown{false};
 static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 
-static constexpr const char* APP_VERSION = "0.2.29";
+static constexpr const char* APP_VERSION = "0.2.30";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -248,8 +248,31 @@ static std::string executableDir(const char* argv0) {
     return exe_path.parent_path().string();
 }
 
+static bool isAbsolutePath(const std::string& path) {
+    return std::filesystem::path(path).is_absolute();
+}
+
+static std::string resolveRelativeToBaseDir(const std::string& path) {
+    if (path.empty() || isAbsolutePath(path)) return path;
+    return (std::filesystem::path(g_base_dir) / path).string();
+}
+
 static void applyRuntimeDefaults(Config& cfg) {
-    if (cfg.decoder_dir.empty()) cfg.decoder_dir = "/home/ultron/RS/demod/mod";
+    // Default layout:
+    //   <wsrx directory>/wsrx
+    //   <wsrx directory>/config.ini
+    //   <wsrx directory>/decoder/rs41mod
+    //   <wsrx directory>/decoder/dfm09mod
+    //   <wsrx directory>/decoder/m10m20mod
+    //   <wsrx directory>/decoder/imet54mod
+    //   <wsrx directory>/decoder/dft_detect
+    //
+    // Relative decoder paths from config.ini or CLI are resolved against the
+    // directory where the running wsrx binary is located, not against the
+    // current working directory.
+    if (cfg.decoder_dir.empty()) cfg.decoder_dir = "decoder";
+    cfg.decoder_dir = resolveRelativeToBaseDir(cfg.decoder_dir);
+
 }
 
 static std::string lowerCopy(std::string s) {
@@ -277,13 +300,30 @@ static std::string decoderLabel(const std::string& decoder) {
     return decoder;
 }
 
+static void validateRequiredDecoderFiles(const Config& cfg) {
+    const std::vector<std::string> required = {
+        "rs41mod",
+        "dfm09mod",
+        "m10m20mod",
+        "imet54mod",
+        "dft_detect"
+    };
+
+    for (const auto& file : required) {
+        const std::string path = joinPath(cfg.decoder_dir, file);
+        if (!fileExists(path)) {
+            throw std::runtime_error("Required decoder file missing: " + path + " (decoder_dir=" + cfg.decoder_dir + ")");
+        }
+    }
+}
+
 static std::string decoderCommandPath(const Config& cfg, const std::string& decoder) {
     std::string d = normalizeDecoderName(decoder);
-    if (d == "rs41") return !cfg.rs41_command.empty() ? cfg.rs41_command : joinPath(cfg.decoder_dir, "rs41mod");
-    if (d == "dfm") return !cfg.dfm_command.empty() ? cfg.dfm_command : joinPath(cfg.decoder_dir, "dfm09mod");
-    if (d == "m10") return !cfg.m10_command.empty() ? cfg.m10_command : joinPath(cfg.decoder_dir, "m10m20mod");
-    if (d == "m20") return !cfg.m20_command.empty() ? cfg.m20_command : joinPath(cfg.decoder_dir, "m10m20mod");
-    if (d == "imet") return !cfg.imet_command.empty() ? cfg.imet_command : joinPath(cfg.decoder_dir, "imet54mod");
+    if (d == "rs41") return joinPath(cfg.decoder_dir, "rs41mod");
+    if (d == "dfm") return joinPath(cfg.decoder_dir, "dfm09mod");
+    if (d == "m10") return joinPath(cfg.decoder_dir, "m10m20mod");
+    if (d == "m20") return joinPath(cfg.decoder_dir, "m10m20mod");
+    if (d == "imet") return joinPath(cfg.decoder_dir, "imet54mod");
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -291,22 +331,20 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     std::string d = normalizeDecoderName(decoder);
     if (d == "rs41") return expandDecoderArgs("--ecc2 --crc -vx --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "dfm") return expandDecoderArgs("-i -vv --ecc --json --dist --ptu --IQ {iq_offset} - {sample_rate} 16", cfg);
-    if (d == "m10") return expandDecoderArgs("--dc -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
-    if (d == "m20") return expandDecoderArgs("--dc -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
-    if (d == "imet") return expandDecoderArgs("--ecc --IQ {iq_offset} --lp - {sample_rate} 16 --json --ptu", cfg);
+    if (d == "m10") return expandDecoderArgs("-vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "m20") return expandDecoderArgs(" -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "imet") return expandDecoderArgs("--ecc --IQ {iq_offset} - {sample_rate} 16 --json --ptu", cfg);
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
 static std::string buildDecoderCommand(const Config& cfg, Logger& log) {
-    if (!cfg.decoder_command.empty()) return cfg.decoder_command;
-
     const std::string decoder_name = normalizeDecoderName(cfg.decoder);
     const std::string label = decoderLabel(decoder_name);
     const std::string cmd_path = decoderCommandPath(cfg, decoder_name);
     const std::string args = decoderArgsFor(cfg, decoder_name);
 
     if (!fileExists(cmd_path)) {
-        log.warn(label + " decoder not found at: " + cmd_path);
+        throw std::runtime_error(label + " decoder not found: " + cmd_path + " (expected in decoder/ next to wsrx)");
     }
     if (!cfg.wav_file.empty()) {
         std::string prefix;
@@ -546,6 +584,26 @@ static double medianPower(std::vector<SpectrumBin> bins) {
     const size_t mid = values.size() / 2;
     if (values.size() % 2) return values[mid];
     return (values[mid - 1] + values[mid]) / 2.0;
+}
+
+static double estimatePeakWidthHz(const std::vector<SpectrumBin>& spectrum, size_t peak_idx, double trigger_db) {
+    if (spectrum.empty() || peak_idx >= spectrum.size()) return 0.0;
+
+    size_t left = peak_idx;
+    while (left > 0 && spectrum[left - 1].power_db >= trigger_db) --left;
+
+    size_t right = peak_idx;
+    while (right + 1 < spectrum.size() && spectrum[right + 1].power_db >= trigger_db) ++right;
+
+    if (right <= left) {
+        if (spectrum.size() >= 2) {
+            if (peak_idx > 0) return std::fabs(spectrum[peak_idx].frequency_hz - spectrum[peak_idx - 1].frequency_hz);
+            return std::fabs(spectrum[peak_idx + 1].frequency_hz - spectrum[peak_idx].frequency_hz);
+        }
+        return 0.0;
+    }
+
+    return std::fabs(spectrum[right].frequency_hz - spectrum[left].frequency_hz);
 }
 
 
@@ -790,12 +848,26 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
         list.push_back(idx);
     };
 
+    auto peakWidthOk = [&](size_t idx) {
+        if (cfg.scan_min_peak_width_hz <= 0) return true;
+        const double width_hz = estimatePeakWidthHz(spectrum, idx, trigger);
+        if (width_hz >= static_cast<double>(cfg.scan_min_peak_width_hz)) return true;
+        if (cfg.verbose || cfg.decoder_debug) {
+            std::ostringstream msg;
+            msg << "scan peak ignored " << (spectrum[idx].frequency_hz / 1e6)
+                << " MHz width=" << width_hz << " Hz min=" << cfg.scan_min_peak_width_hz << " Hz";
+            log.debug(msg.str());
+        }
+        return false;
+    };
+
     std::vector<size_t> peak_idx;
     for (size_t i = 1; i + 1 < spectrum.size(); ++i) {
         if (isBlacklistedFrequencyHz(cfg, spectrum[i].frequency_hz)) continue;
         if (spectrum[i].power_db < trigger) continue;
         if (spectrum[i].power_db < spectrum[i - 1].power_db) continue;
         if (spectrum[i].power_db < spectrum[i + 1].power_db) continue;
+        if (!peakWidthOk(i)) continue;
         addPeakIndex(peak_idx, i);
     }
 
@@ -827,6 +899,7 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
             if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
             const double snr = spectrum[idx].power_db - nf;
             if (snr < cfg.scan_fallback_min_snr_db) break;
+            if (!peakWidthOk(idx)) continue;
             addPeakIndex(peak_idx, idx);
             if (static_cast<int>(peak_idx.size()) >= cfg.scan_fallback_candidates) break;
         }
@@ -858,6 +931,9 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
             msg << " channel=" << (q_f / 1e6) << " MHz";
         }
         msg << " level=" << spectrum[idx].power_db << " dB";
+        if (cfg.scan_min_peak_width_hz > 0) {
+            msg << " width=" << estimatePeakWidthHz(spectrum, idx, trigger) << " Hz";
+        }
         if (used_fallback) msg << " snr=" << (spectrum[idx].power_db - nf) << " dB";
         log.info(msg.str());
     }
@@ -872,8 +948,7 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     const std::string dft_detect = joinPath(cfg.decoder_dir, "dft_detect");
 
     if (!fileExists(dft_detect)) {
-        log.warn("dft_detect not found at: " + dft_detect + " - scan detection cannot run");
-        return std::nullopt;
+        throw std::runtime_error("Required decoder file missing: " + dft_detect + " (decoder_dir=" + cfg.decoder_dir + ")");
     }
 
     if (cfg.decoder_debug) {
@@ -1325,6 +1400,7 @@ int main(int argc, char** argv) {
         const std::string config_path = joinPath(g_base_dir, "config.ini");
         Config cfg = Config::load(args, config_path);
         applyRuntimeDefaults(cfg);
+        validateRequiredDecoderFiles(cfg);
         Logger log("", cfg.verbose);
         Uploader uploader(cfg, log);
         OffsetCache offset_cache;

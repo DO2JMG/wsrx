@@ -18,13 +18,7 @@ struct Config {
     std::string ka9q_radio = "wettersonde.local";
     std::string ka9q_pcm = "wettersonde-pcm.local";
 
-    std::string decoder_dir = "/home/ultron/RS/demod/mod";
-    std::string rs41_command;
-    std::string dfm_command;
-    std::string m10_command;
-    std::string m20_command;
-    std::string imet_command;
-    std::string decoder_command;
+    std::string decoder_dir = "decoder";
     std::string wav_file;
 
     int sample_rate = 48000;
@@ -45,6 +39,7 @@ struct Config {
     int scan_power_bin_hz = 800;
     int scan_quantization_hz = 10000;
     int scan_min_distance_hz = 1000;
+    int scan_min_peak_width_hz = 5000;
     std::vector<double> scan_blacklist_mhz;
     double scan_blacklist_width_khz = 5.0;
     double scan_active_skip_width_khz = 5.0;

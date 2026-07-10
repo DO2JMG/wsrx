@@ -134,12 +134,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_pcm = iniGet(ini, "ka9q.pcm_name", cfg.ka9q_pcm);
 
     cfg.decoder_dir = iniGet(ini, "decoder.decoder_dir", cfg.decoder_dir);
-    cfg.rs41_command = iniGet(ini, "decoder.rs41_command", cfg.rs41_command);
-    cfg.dfm_command = iniGet(ini, "decoder.dfm_command", cfg.dfm_command);
-    cfg.m10_command = iniGet(ini, "decoder.m10_command", cfg.m10_command);
-    cfg.m20_command = iniGet(ini, "decoder.m20_command", cfg.m20_command);
-    cfg.imet_command = iniGet(ini, "decoder.imet_command", cfg.imet_command);
-    cfg.decoder_command = iniGet(ini, "decoder.decoder_command", cfg.decoder_command);
     cfg.wav_file = iniGet(ini, "decoder.wav_file", cfg.wav_file);
     cfg.sample_rate = iniInt(ini, "decoder.sample_rate", cfg.sample_rate);
     cfg.ka9q_low_hz = iniInt(ini, "decoder.ka9q_low_hz", cfg.ka9q_low_hz);
@@ -159,6 +153,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_power_bin_hz = iniInt(ini, "scan.power_bin_hz", cfg.scan_power_bin_hz);
     cfg.scan_quantization_hz = iniInt(ini, "scan.quantization_hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = iniInt(ini, "scan.min_distance_hz", cfg.scan_min_distance_hz);
+    cfg.scan_min_peak_width_hz = iniInt(ini, "scan.min_peak_width_hz", cfg.scan_min_peak_width_hz);
     cfg.scan_blacklist_mhz = iniFrequencyListMhz(ini, "scan.blacklist_mhz");
     cfg.scan_blacklist_width_khz = iniDouble(ini, "scan.blacklist_width_khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = iniDouble(ini, "scan.active_skip_width_khz", cfg.scan_active_skip_width_khz);
@@ -188,12 +183,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_radio = args.get("ka9q-radio", cfg.ka9q_radio);
     cfg.ka9q_pcm = args.get("ka9q-pcm", cfg.ka9q_pcm);
     cfg.decoder_dir = args.get("decoder-dir", cfg.decoder_dir);
-    cfg.rs41_command = args.get("rs41-command", cfg.rs41_command);
-    cfg.dfm_command = args.get("dfm-command", cfg.dfm_command);
-    cfg.m10_command = args.get("m10-command", cfg.m10_command);
-    cfg.m20_command = args.get("m20-command", cfg.m20_command);
-    cfg.imet_command = args.get("imet-command", cfg.imet_command);
-    cfg.decoder_command = args.get("decoder-cmd", cfg.decoder_command);
     cfg.wav_file = args.get("wav", cfg.wav_file);
 
     cfg.sample_rate = args.getInt("sample-rate", cfg.sample_rate);
@@ -218,6 +207,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_power_bin_hz = args.getInt("scan-power-bin-hz", cfg.scan_power_bin_hz);
     cfg.scan_quantization_hz = args.getInt("scan-quantization-hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = args.getInt("scan-min-distance-hz", cfg.scan_min_distance_hz);
+    cfg.scan_min_peak_width_hz = args.getInt("scan-min-peak-width-hz", cfg.scan_min_peak_width_hz);
     if (args.has("scan-blacklist-mhz")) cfg.scan_blacklist_mhz = parseFrequencyListMhz(args.get("scan-blacklist-mhz", ""));
     cfg.scan_blacklist_width_khz = args.getDouble("scan-blacklist-width-khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = args.getDouble("scan-active-skip-width-khz", cfg.scan_active_skip_width_khz);
@@ -255,6 +245,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
         if (cfg.scan_power_bin_hz < 100) cfg.scan_power_bin_hz = 100;
         if (cfg.scan_quantization_hz < 1000) cfg.scan_quantization_hz = 1000;
         if (cfg.scan_min_distance_hz < 100) cfg.scan_min_distance_hz = 100;
+        if (cfg.scan_min_peak_width_hz < 0) cfg.scan_min_peak_width_hz = 0;
         if (cfg.scan_blacklist_width_khz < 0.0) cfg.scan_blacklist_width_khz = 0.0;
         if (cfg.scan_blacklist_width_khz > 100.0) cfg.scan_blacklist_width_khz = 100.0;
         if (cfg.scan_active_skip_width_khz < 0.0) cfg.scan_active_skip_width_khz = 0.0;
