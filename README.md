@@ -69,3 +69,36 @@ freq = "401m50"
 freq = 0
 ttl = 0
 ```
+
+Enable and start KA9Q:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable radiod@wettersonde_rx
+sudo systemctl start radiod@wettersonde_rx
+```
+
+Check if KA9Q is running:
+
+```
+systemctl status radiod@wettersonde_rx --no-pager
+avahi-browse -art | grep -E "wettersonde|ka9q|pcm"
+```
+
+### Installing the decoder binaries
+
+wsrx requires the decoder binaries in the decoder folder next to the wsrx executable. If one of these files is missing, wsrx will stop with an error message.
+
+```
+cd ~
+git clone https://github.com/rs1729/RS.git
+
+# Build the radiosonde decoders
+cd ~/RS/demod/mod
+make
+
+# Build dft_detect for signal detection
+cd ~/RS/scan
+
+gcc dft_detect.c -lm -o dft_detect
+```
