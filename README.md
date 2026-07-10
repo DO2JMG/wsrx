@@ -46,6 +46,31 @@ Make the executables and start scripts executable:
 chmod +x /home/pi/wsrx/wsrx /home/pi/wsrx/wsrx-web /home/pi/wsrx/wsrx.sh /home/pi/wsrx/wsrx-web.sh
 ```
 
+### Starting wsrx and the web interface
+
+Start wsrx manually for the first test:
+
+```
+cd /home/pi/wsrx
+./wsrx.sh start
+./wsrx.sh status
+./wsrx.sh log
+```
+
+Start the web interface:
+
+```
+cd /home/pi/wsrx
+./wsrx-web.sh start
+./wsrx-web.sh status
+```
+
+The web interface listens on port 8073 by default. Open it in your browser with the IP address of your receiver, for example:
+
+```
+http://receiver-ip-address:8073/
+```
+
 ### Installing KA9Q Radio
 
 KA9Q Radio is used as the SDR backend. The example below builds KA9Q from source and installs it system-wide.
