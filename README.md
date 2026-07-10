@@ -102,3 +102,25 @@ cd ~/RS/scan
 
 gcc dft_detect.c -lm -o dft_detect
 ```
+
+Create the decoder directory and copy the required files. The radiosonde decoders are in RS/demod/mod, but dft_detect is in RS/scan:
+
+```
+mkdir -p /home/pi/wsrx/decoder
+cp ~/RS/demod/mod/rs41mod /home/pi/wsrx/decoder/
+cp ~/RS/demod/mod/dfm09mod /home/pi/wsrx/decoder/
+cp ~/RS/demod/mod/m10m20mod /home/pi/wsrx/decoder/
+cp ~/RS/demod/mod/imet54mod /home/pi/wsrx/decoder/
+cp ~/RS/scan/dft_detect /home/pi/wsrx/decoder/
+chmod +x /home/pi/wsrx/decoder/*
+```
+
+Verify the decoder files:
+
+```
+ls -lh /home/pi/wsrx/decoder/rs41mod \
+       /home/pi/wsrx/decoder/dfm09mod \
+       /home/pi/wsrx/decoder/m10m20mod \
+       /home/pi/wsrx/decoder/imet54mod \
+       /home/pi/wsrx/decoder/dft_detect
+```
