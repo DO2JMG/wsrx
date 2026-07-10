@@ -13,6 +13,25 @@ sudo apt install -y avahi-utils build-essential make gcc g++ git wget unzip rsyn
   uuid-dev libsamplerate-dev
 ```
 
+### Installing wsrx
+
+```
+cd $home
+
+https://github.com/DO2JMG/wsrx
+
+cd wsrx
+
+make clean
+make
+```
+
+Make the executables and start scripts executable:
+
+```
+chmod +x /home/pi/wsrx/wsrx /home/pi/wsrx/wsrx-web /home/pi/wsrx/wsrx.sh /home/pi/wsrx/wsrx-web.sh
+```
+
 ### Installing KA9Q Radio
 
 KA9Q Radio is used as the SDR backend. The example below builds KA9Q from source and installs it system-wide.
@@ -124,3 +143,7 @@ ls -lh /home/pi/wsrx/decoder/rs41mod \
        /home/pi/wsrx/decoder/imet54mod \
        /home/pi/wsrx/decoder/dft_detect
 ```
+
+
+
+
