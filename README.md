@@ -1,7 +1,9 @@
 ### wxrx Radiosonde decoder, monitoring, scan and decoder status
 
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
-<br><br><br>
+
+<p>&nbsp;</p>
+<p>&nbsp;</p>
 
 This guide installs KA9Q Radio, the wsrx radiosonde receiver software and the required decoder programs. wsrx uses KA9Q as SDR backend and expects all decoder binaries in the decoder subdirectory next to the wsrx application.
 
