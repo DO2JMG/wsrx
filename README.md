@@ -48,6 +48,8 @@ chmod +x /home/pi/wsrx/wsrx /home/pi/wsrx/wsrx-web /home/pi/wsrx/wsrx.sh /home/p
 
 ### Starting wsrx and the web interface
 
+KA9Q must be fully installed before wsrx is started.
+
 Start wsrx manually for the first test:
 
 ```
