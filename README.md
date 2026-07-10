@@ -183,6 +183,64 @@ ls -lh /home/pi/wsrx/decoder/rs41mod \
        /home/pi/wsrx/decoder/dft_detect
 ```
 
+### Optional: systemd service files
 
+The included start scripts already write log files into the wsrx directory. If you want wsrx and the web interface to start automatically after boot, create these systemd services.
 
+```
+sudo nano /etc/systemd/system/wsrx.service
+```
 
+```
+[Unit]
+Description=wsrx radiosonde receiver
+After=network-online.target radiod@wettersonde_rx.service
+Wants=network-online.target radiod@wettersonde_rx.service
+
+[Service]
+Type=forking
+WorkingDirectory=/home/pi/wsrx
+ExecStart=/home/pi/wsrx/wsrx.sh start
+ExecStop=/home/pi/wsrx/wsrx.sh stop
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```
+sudo nano /etc/systemd/system/wsrx-web.service
+```
+```
+[Unit]
+Description=wsrx web interface
+After=network-online.target wsrx.service
+Wants=network-online.target
+
+[Service]
+Type=forking
+WorkingDirectory=/home/pi/wsrx
+ExecStart=/home/pi/wsrx/wsrx-web.sh start
+ExecStop=/home/pi/wsrx/wsrx-web.sh stop
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start both services:
+
+```
+sudo systemctl daemon-reload
+sudo systemctl enable wsrx.service wsrx-web.service
+sudo systemctl start wsrx.service wsrx-web.service
+```
+
+Show logs:
+
+```
+tail -f /home/pi/wsrx/logs/wsrx.log
+tail -f /home/pi/wsrx/logs/wsrx-web.log
+```
