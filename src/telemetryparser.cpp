@@ -162,9 +162,17 @@ std::string normalizeImetSerialForDxlAprs(const std::string& serial, int frame, 
 }
 
 std::string hhmmssFromIsoUtc(const std::string& iso) {
-    if (iso.size() >= 19 && iso[10] == 'T') {
+    // Full ISO-8601 timestamp, e.g. 2026-07-11T21:49:14.000Z
+    if (iso.size() >= 19 && iso[10] == 'T' && iso[13] == ':' && iso[16] == ':') {
         return iso.substr(11, 2) + iso.substr(14, 2) + iso.substr(17, 2);
     }
+
+    // imet4iq uses a time-only UTC value, e.g. 21:49:14Z.
+    if (iso.size() >= 8 && iso[2] == ':' && iso[5] == ':') {
+        const std::string hhmmss = iso.substr(0, 2) + iso.substr(3, 2) + iso.substr(6, 2);
+        if (secondsOfDayFromHhmmss(hhmmss) >= 0) return hhmmss;
+    }
+
     return {};
 }
 }
