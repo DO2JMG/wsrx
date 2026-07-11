@@ -35,7 +35,7 @@ static std::atomic<bool> g_shutdown{false};
 static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 
-static constexpr const char* APP_VERSION = "0.2.30";
+static constexpr const char* APP_VERSION = "0.2.31";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -264,7 +264,7 @@ static void applyRuntimeDefaults(Config& cfg) {
     //   <wsrx directory>/decoder/rs41mod
     //   <wsrx directory>/decoder/dfm09mod
     //   <wsrx directory>/decoder/m10m20mod
-    //   <wsrx directory>/decoder/imet54mod
+    //   <wsrx directory>/decoder/imet4iq
     //   <wsrx directory>/decoder/dft_detect
     //
     // Relative decoder paths from config.ini or CLI are resolved against the
@@ -305,7 +305,7 @@ static void validateRequiredDecoderFiles(const Config& cfg) {
         "rs41mod",
         "dfm09mod",
         "m10m20mod",
-        "imet54mod",
+        "imet4iq",
         "dft_detect"
     };
 
@@ -323,7 +323,7 @@ static std::string decoderCommandPath(const Config& cfg, const std::string& deco
     if (d == "dfm") return joinPath(cfg.decoder_dir, "dfm09mod");
     if (d == "m10") return joinPath(cfg.decoder_dir, "m10m20mod");
     if (d == "m20") return joinPath(cfg.decoder_dir, "m10m20mod");
-    if (d == "imet") return joinPath(cfg.decoder_dir, "imet54mod");
+    if (d == "imet") return joinPath(cfg.decoder_dir, "imet4iq");
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -333,7 +333,7 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     if (d == "dfm") return expandDecoderArgs("-i -vv --ecc --json --dist --ptu --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "m10") return expandDecoderArgs("-vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "m20") return expandDecoderArgs(" -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
-    if (d == "imet") return expandDecoderArgs("--ecc --IQ {iq_offset} - {sample_rate} 16 --json --ptu", cfg);
+    if (d == "imet") return expandDecoderArgs("--json --iq {iq_offset} - {sample_rate} 16", cfg);
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
