@@ -976,7 +976,8 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
         << " | " << shellQuote(dft_detect)
         << " -t " << cfg.scan_detect_dwell_sec
         << " --types RS41,DFM9,M10,IMET4"
-        << " --iq --bw 24 --dc - " << cfg.sample_rate << " 16 2>/dev/null";
+        << " --iq --bw 15 --dc - "
+        << cfg.sample_rate << " 16 2>/dev/null";
 
     if (cfg.decoder_debug) {
         log.debug("scan command: " + cmd.str());
