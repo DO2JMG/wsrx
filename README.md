@@ -44,7 +44,7 @@ sudo apt install -y avahi-utils build-essential make gcc g++ git wget unzip rsyn
 ```
 cd $home
 
-https://github.com/DO2JMG/wsrx
+git clone https://github.com/DO2JMG/wsrx.git
 
 cd wsrx
 
