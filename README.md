@@ -10,13 +10,13 @@ With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radioso
 
 | Manufacturer | Model              | Position | Temperature | Humidity | Pressure         |
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
-| Vaisala      | RS41-SG/SGP/       | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
-| Graw         | DFM06/09/17        | ✅       | ✅          | ❌       | ❌               |
+| Vaisala      | RS41-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
+| Graw         | DFM09/17        | ✅       | ✅          | ❌       | ❌               |
 | Meteomodem   | M10                | ✅       | ✅          | ✅       | Not Sent         |
 | Meteomodem   | M20                | ✅       | ❌          | ❌       | Not Sent         |
 | InterMet     | iMet-4             | ✅       | ✅          | ✅       | ✅               |
-| Meisei       | iMS-100 / RS-11G   | ✅       | ✅          | ✅       | ❌               |
-| Meteolabor   | SRS-C34 / C50      | ✅       | ✅          | ✅       | ❌               |
+| Meisei       | iMS-100    | ✅       | ✅          | ✅       | ❌               |
+| Meteolabor   | SRS-C50      | ✅       | ✅          | ✅       | ❌               |
 
 The C50 has not been tested.
 
