@@ -5,19 +5,22 @@ With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radioso
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
 
 <p>&nbsp;</p>
-<p>&nbsp;</p>
 
 ### Radiosonde Support Matrix
 
 | Manufacturer | Model              | Position | Temperature | Humidity | Pressure         |
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
-| Vaisala      | RS41-SG/SGP/SGM    | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
+| Vaisala      | RS41-SG/SGP/       | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
 | Graw         | DFM06/09/17        | ✅       | ✅          | ❌       | ❌               |
 | Meteomodem   | M10                | ✅       | ✅          | ✅       | Not Sent         |
 | Meteomodem   | M20                | ✅       | ❌          | ❌       | Not Sent         |
 | InterMet     | iMet-4             | ✅       | ✅          | ✅       | ✅               |
 | Meisei       | iMS-100 / RS-11G   | ✅       | ✅          | ✅       | ❌               |
 | Meteolabor   | SRS-C34 / C50      | ✅       | ✅          | ✅       | ❌               |
+
+The C50 has not been tested.
+
+<p>&nbsp;</p>
 
 This guide installs KA9Q Radio, the wsrx radiosonde receiver software and the required decoder programs. wsrx uses KA9Q as SDR backend and expects all decoder binaries in the decoder subdirectory next to the wsrx application.
 
