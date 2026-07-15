@@ -161,46 +161,6 @@ systemctl status radiod@wettersonde_rx --no-pager
 avahi-browse -art | grep -E "wettersonde|ka9q|pcm"
 ```
 
-### Installing the decoder binaries
-
-wsrx requires the decoder binaries in the decoder folder next to the wsrx executable. If one of these files is missing, wsrx will stop with an error message.
-
-```
-cd ~
-git clone https://github.com/rs1729/RS.git
-
-# Build the radiosonde decoders
-cd ~/RS/demod/mod
-make
-
-# Build dft_detect for signal detection
-cd ~/RS/scan
-
-gcc dft_detect.c -lm -o dft_detect
-```
-
-Create the decoder directory and copy the required files. The radiosonde decoders are in RS/demod/mod, but dft_detect is in RS/scan:
-
-```
-mkdir -p /home/pi/wsrx/decoder
-cp ~/RS/demod/mod/rs41mod /home/pi/wsrx/decoder/
-cp ~/RS/demod/mod/dfm09mod /home/pi/wsrx/decoder/
-cp ~/RS/demod/mod/m10m20mod /home/pi/wsrx/decoder/
-cp ~/RS/demod/mod/imet54mod /home/pi/wsrx/decoder/
-cp ~/RS/scan/dft_detect /home/pi/wsrx/decoder/
-chmod +x /home/pi/wsrx/decoder/*
-```
-
-Verify the decoder files:
-
-```
-ls -lh /home/pi/wsrx/decoder/rs41mod \
-       /home/pi/wsrx/decoder/dfm09mod \
-       /home/pi/wsrx/decoder/m10m20mod \
-       /home/pi/wsrx/decoder/imet54mod \
-       /home/pi/wsrx/decoder/dft_detect
-```
-
 ### Optional: systemd service files
 
 The included start scripts already write log files into the wsrx directory. If you want wsrx and the web interface to start automatically after boot, create these systemd services.
@@ -227,33 +187,12 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-```
-sudo nano /etc/systemd/system/wsrx-web.service
-```
-```
-[Unit]
-Description=wsrx web interface
-After=network-online.target wsrx.service
-Wants=network-online.target
-
-[Service]
-Type=forking
-WorkingDirectory=/home/pi/wsrx
-ExecStart=/home/pi/wsrx/wsrx-web.sh start
-ExecStop=/home/pi/wsrx/wsrx-web.sh stop
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
 Enable and start both services:
 
 ```
 sudo systemctl daemon-reload
-sudo systemctl enable wsrx.service wsrx-web.service
-sudo systemctl start wsrx.service wsrx-web.service
+sudo systemctl enable wsrx.service 
+sudo systemctl start wsrx.service 
 ```
 
 Show logs:
