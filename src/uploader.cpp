@@ -199,6 +199,11 @@ bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
         return std::regex_match(serial, meisei_serial_re);
     }
 
+    if (type.find("C50") != std::string::npos) {
+        static const std::regex c50_serial_re(R"(^C50[0-9A-F]{4}$)");
+        return std::regex_match(serial, c50_serial_re);
+    }
+
     return true;
 }
 

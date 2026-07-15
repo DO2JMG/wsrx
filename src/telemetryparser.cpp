@@ -182,6 +182,17 @@ std::string normalizeMeisei(const std::string& serial) {
     return "IMS" + hex_suffix;
 }
 
+// Meteolabor SRS-C50/C34: "C50" + die letzten 4 Hex-Ziffern des ZWEITEN
+// "-"-getrennten Segments der rohen ID.
+// Ursprünglich als Nachbau von generate_aprs_id() in auto_rx/utils.py gedacht
+// (dort geprüft via "SRSC50" in sonde_data["type"]), aber verifiziert gegen
+// den echten Decoder-Output aus decoder/c50iq.c:
+//   printf("{ \"type\": \"%s\"", "C50");             -> type ist immer "C50"
+//   sprintf(json_sonde_id, "C50-%u", gpx.sn);        -> id ist "C50-<sn>"
+//   (Platzhalter vor Fix: "C50-xxxx")
+// Bei nur einem "-" ist Segment 1 automatisch auch das letzte Segment,
+// die Split-Logik selbst musste also nicht angepasst werden - nur der
+// Typ-Match unten (vorher faelschlich "SRSC50" statt "C50").
 std::string normalizeSRSC50(const std::string& serial) {
     std::vector<std::string> parts;
     size_t start = 0;
@@ -360,7 +371,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
                || normalized_type_upper.find("IMS100") != std::string::npos
                || normalized_type_upper.find("RS11G") != std::string::npos) {
         f.serial = normalizeMeisei(f.serial);
-    } else if (normalized_type_upper.find("SRSC50") != std::string::npos) {
+    } else if (normalized_type_upper.find("C50") != std::string::npos) {
         f.serial = normalizeSRSC50(f.serial);
     } else {
         f.serial = normalizeDFMSerial(f.serial, f.type);
