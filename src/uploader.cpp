@@ -8,7 +8,7 @@
 #include <regex>
 
 namespace {
-constexpr const char* APP_VERSION = "0.2.31";
+constexpr const char* APP_VERSION = "0.2.34";
 constexpr const char* TELEMETRY_URL = "http://api.wettersonde.net/telemetrie.php";
 constexpr const char* POSITION_URL = "http://api.wettersonde.net/position.php";
 
@@ -85,6 +85,11 @@ Uploader::Uploader(const Config& cfg, Logger& log) : cfg_(cfg), log_(log) {
 
 bool Uploader::sendTelemetry(const TelemetryFrame& frame) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!hasGpsFix(frame)) {
+        log_.debug("Rejected frame without GPS fix (lat/lon = 0): type=" + frame.type + " serial=" + frame.serial);
+        return false;
+    }
+
     if (!validTypeSerial(frame)) {
         log_.warn("Rejected frame by type/serial rule: type=" + frame.type + " serial=" + frame.serial);
         return false;
@@ -101,6 +106,16 @@ bool Uploader::sendTelemetry(const TelemetryFrame& frame) {
         log_.info("DRY-RUN telemetry JSON: " + data);
         return true;
     }
+
+    std::ostringstream msg;
+    
+    msg << "Uploading: " << frame.type << " " << frame.serial
+                    << " freq=" << frame.frequency_mhz
+                    << " lat=" << frame.lat
+                    << " lon=" << frame.lon
+                    << " alt=" << frame.alt_m;
+    
+                    log_.info(msg.str());
 
     return postWithCurl(TELEMETRY_URL, data);
 }
@@ -145,6 +160,18 @@ bool Uploader::allowedByRateLimit(const std::string& serial) {
     return true;
 }
 
+bool Uploader::hasGpsFix(const TelemetryFrame& frame) const {
+    if (std::isnan(frame.lat) || std::isnan(frame.lon)) return false;
+
+    // Manche Decoder (z.B. meisei100mod) liefern schon Frames bevor ein
+    // GPS-Fix vorliegt, dann mit lat = lon = 0.0 statt fehlenden Feldern.
+    // Solche Frames sind kein gueltiger Standort und duerfen nicht hochgeladen werden.
+    constexpr double kEpsilon = 1e-6;
+    if (std::fabs(frame.lat) < kEpsilon && std::fabs(frame.lon) < kEpsilon) return false;
+
+    return true;
+}
+
 bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
     const auto& type = frame.type;
     const auto& serial = frame.serial;
@@ -154,8 +181,6 @@ bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
     }
 
     if (type.find("DFM") != std::string::npos) {
-        // Upload DFM only after dfm09mod has resolved the real serial.
-        // Reject placeholders such as DFM-xxxxxxxx / Dxxxxxxxx.
         static const std::regex dfm_serial_re(R"(^D[0-9]{6,10}$)");
         return std::regex_match(serial, dfm_serial_re);
     }
@@ -169,6 +194,11 @@ bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
         return std::regex_match(serial, imet_serial_re);
     }
 
+    if (type.find("MEISEI") != std::string::npos || type.find("IMS100") != std::string::npos || type.find("RS11G") != std::string::npos) {
+        static const std::regex meisei_serial_re(R"(^IMS[0-9A-F]{1,6}$)");
+        return std::regex_match(serial, meisei_serial_re);
+    }
+
     return true;
 }
 
@@ -179,9 +209,7 @@ std::string Uploader::buildTelemetryPostData(const TelemetryFrame& frame) const 
 
     oss << '{';
     addString(oss, first, "timestamp", ts);
-    // Only RS41 has a real power-up/frame counter compatible with the API.
-    // DFM/M10/M20 decoder frame values can be timestamps or internal counters,
-    // so send 0 for all non-RS41 types.
+
     const int upload_frame = (frame.type.find("RS41") != std::string::npos)
         ? (frame.frame >= 0 ? frame.frame : 0)
         : 0;
@@ -189,7 +217,6 @@ std::string Uploader::buildTelemetryPostData(const TelemetryFrame& frame) const 
     addNumberRaw(oss, first, "latitude", frame.lat);
     addNumberRaw(oss, first, "longitude", frame.lon);
     addNumber1(oss, first, "altitude", frame.alt_m);
-    // rs41mod vel_h/vH is m/s; wettersonde.net API expects speed in km/h.
     const double speed_kmh = std::isnan(frame.speed_ms) ? 0.0 : frame.speed_ms * 3.6;
     addNumber1(oss, first, "speed", speed_kmh);
     addNumber1(oss, first, "direction", std::isnan(frame.heading_deg) ? 0.0 : frame.heading_deg);
@@ -210,10 +237,7 @@ std::string Uploader::buildTelemetryPostData(const TelemetryFrame& frame) const 
     if (!std::isnan(frame.burstkilltimer_sec)) addInt(oss, first, "burstkilltimer", static_cast<int>(std::llround(frame.burstkilltimer_sec)));
     if (!std::isnan(frame.killtimer_sec)) addInt(oss, first, "killtimer", static_cast<int>(std::llround(frame.killtimer_sec)));
     if (frame.sats >= 0) addInt(oss, first, "sat", frame.sats);
-    if (!frame.xdata.empty()) addString(oss, first, "xdata", frame.xdata);
-    if (!frame.xdata1.empty()) addString(oss, first, "xdata1", frame.xdata1);
-    if (!frame.xdata2.empty()) addString(oss, first, "xdata2", frame.xdata2);
-    if (!frame.xdata3.empty()) addString(oss, first, "xdata3", frame.xdata3);
+    if (!frame.aux.empty()) addString(oss, first, "aux", frame.aux);
     if (!frame.raw_datetime.empty()) addString(oss, first, "datetime", frame.raw_datetime);
 
     oss << '}';

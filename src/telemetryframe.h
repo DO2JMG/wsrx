@@ -9,8 +9,6 @@ struct TelemetryFrame {
     std::string type;
     std::string receiver;
 
-    // frequency_mhz is the actual tuned decoder/channel frequency.
-    // tx_frequency_mhz is the transmitter frequency reported by the decoder, when available.
     double frequency_mhz = 0.0;
     double tx_frequency_mhz = NAN;
     double lat = NAN;
@@ -25,10 +23,7 @@ struct TelemetryFrame {
     double battery_v = NAN;
     double burstkilltimer_sec = NAN;
     double killtimer_sec = NAN;
-    std::string xdata;
-    std::string xdata1;
-    std::string xdata2;
-    std::string xdata3;
+    std::string aux;
 
     int frame = -1;
     int sats = -1;

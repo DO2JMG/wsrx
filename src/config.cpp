@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -94,7 +95,7 @@ std::vector<double> parseFrequencyListMhz(const std::string& value) {
             double mhz = std::stod(v);
             if (std::isfinite(mhz) && mhz > 0.0) out.push_back(mhz);
         } catch (...) {
-            // Ignore invalid blacklist entries so one typo does not stop wsrx.
+            // Ignore invalid frequency-list entries so one typo does not stop wsrx.
         }
     };
     for (char c : value) {
@@ -154,10 +155,13 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_quantization_hz = iniInt(ini, "scan.quantization_hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = iniInt(ini, "scan.min_distance_hz", cfg.scan_min_distance_hz);
     cfg.scan_min_peak_width_hz = iniInt(ini, "scan.min_peak_width_hz", cfg.scan_min_peak_width_hz);
-    cfg.scan_blacklist_mhz = iniFrequencyListMhz(ini, "scan.blacklist_mhz");
-    cfg.scan_blacklist_width_khz = iniDouble(ini, "scan.blacklist_width_khz", cfg.scan_blacklist_width_khz);
+    cfg.scan_only_mhz = iniFrequencyListMhz(ini, "scan.only_scan_mhz");
+    cfg.scan_always_mhz = iniFrequencyListMhz(ini, "scan.always_scan_mhz");
+    cfg.scan_never_mhz = iniFrequencyListMhz(ini, "scan.never_scan_mhz");
+    cfg.scan_never_scan_width_khz = iniDouble(ini, "scan.never_scan_width_khz", cfg.scan_never_scan_width_khz);
     cfg.scan_active_skip_width_khz = iniDouble(ini, "scan.active_skip_width_khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = iniInt(ini, "scan.max_peaks", cfg.scan_max_peaks);
+    cfg.scan_parallel_detections = iniInt(ini, "scan.parallel_detections", cfg.scan_parallel_detections);
     cfg.scan_accept_score = iniDouble(ini, "scan.accept_score", cfg.scan_accept_score);
     cfg.scan_fallback_when_active = iniBool(ini, "scan.fallback_when_active", cfg.scan_fallback_when_active);
     cfg.scan_fallback_candidates = iniInt(ini, "scan.fallback_candidates", cfg.scan_fallback_candidates);
@@ -208,10 +212,13 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_quantization_hz = args.getInt("scan-quantization-hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = args.getInt("scan-min-distance-hz", cfg.scan_min_distance_hz);
     cfg.scan_min_peak_width_hz = args.getInt("scan-min-peak-width-hz", cfg.scan_min_peak_width_hz);
-    if (args.has("scan-blacklist-mhz")) cfg.scan_blacklist_mhz = parseFrequencyListMhz(args.get("scan-blacklist-mhz", ""));
-    cfg.scan_blacklist_width_khz = args.getDouble("scan-blacklist-width-khz", cfg.scan_blacklist_width_khz);
+    if (args.has("scan-only-mhz")) cfg.scan_only_mhz = parseFrequencyListMhz(args.get("scan-only-mhz", ""));
+    if (args.has("scan-always-mhz")) cfg.scan_always_mhz = parseFrequencyListMhz(args.get("scan-always-mhz", ""));
+    if (args.has("scan-never-mhz")) cfg.scan_never_mhz = parseFrequencyListMhz(args.get("scan-never-mhz", ""));
+    cfg.scan_never_scan_width_khz = args.getDouble("scan-never-scan-width-khz", cfg.scan_never_scan_width_khz);
     cfg.scan_active_skip_width_khz = args.getDouble("scan-active-skip-width-khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = args.getInt("scan-max-peaks", cfg.scan_max_peaks);
+    cfg.scan_parallel_detections = args.getInt("scan-parallel-detections", cfg.scan_parallel_detections);
     cfg.scan_accept_score = args.getDouble("scan-accept-score", cfg.scan_accept_score);
     if (args.has("scan-fallback-when-active")) cfg.scan_fallback_when_active = true;
     cfg.scan_fallback_candidates = args.getInt("scan-fallback-candidates", cfg.scan_fallback_candidates);
@@ -246,11 +253,17 @@ Config Config::load(const Args& args, const std::string& config_file) {
         if (cfg.scan_quantization_hz < 1000) cfg.scan_quantization_hz = 1000;
         if (cfg.scan_min_distance_hz < 100) cfg.scan_min_distance_hz = 100;
         if (cfg.scan_min_peak_width_hz < 0) cfg.scan_min_peak_width_hz = 0;
-        if (cfg.scan_blacklist_width_khz < 0.0) cfg.scan_blacklist_width_khz = 0.0;
-        if (cfg.scan_blacklist_width_khz > 100.0) cfg.scan_blacklist_width_khz = 100.0;
+        if (cfg.scan_never_scan_width_khz < 0.0) cfg.scan_never_scan_width_khz = 0.0;
+        if (cfg.scan_never_scan_width_khz > 100.0) cfg.scan_never_scan_width_khz = 100.0;
         if (cfg.scan_active_skip_width_khz < 0.0) cfg.scan_active_skip_width_khz = 0.0;
         if (cfg.scan_active_skip_width_khz > 100.0) cfg.scan_active_skip_width_khz = 100.0;
         if (cfg.scan_max_peaks < 1) cfg.scan_max_peaks = 1;
+        if (cfg.scan_parallel_detections < 1) cfg.scan_parallel_detections = 1;
+        if (cfg.scan_parallel_detections > 32) cfg.scan_parallel_detections = 32;
+        const unsigned int cpu_count = std::thread::hardware_concurrency();
+        if (cpu_count > 0 && cfg.scan_parallel_detections > static_cast<int>(cpu_count)) {
+            cfg.scan_parallel_detections = static_cast<int>(cpu_count);
+        }
         if (cfg.scan_fallback_candidates < 0) cfg.scan_fallback_candidates = 0;
         if (cfg.scan_accept_score < 0.0) cfg.scan_accept_score = 0.0;
         if (cfg.scan_accept_score > 1.0) cfg.scan_accept_score = 1.0;

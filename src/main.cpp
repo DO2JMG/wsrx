@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -34,8 +35,9 @@
 static std::atomic<bool> g_shutdown{false};
 static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
+static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.2.31";
+static constexpr const char* APP_VERSION = "0.2.34";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -156,7 +158,17 @@ static void closeKa9qSsrc(const Config& cfg, const std::string& ssrc, Logger& lo
         << "--radio " << shellQuote(cfg.ka9q_radio)
         << " >/dev/null 2>&1";
     log.debug("closing KA9Q channel: " + cmd.str());
-    std::system(cmd.str().c_str());
+
+    const int rc = std::system(cmd.str().c_str());
+    if (rc != 0 && cfg.verbose) {
+        log.debug(
+            "closing KA9Q channel failed for SSRC " +
+            ssrc +
+            ", rc=" +
+            std::to_string(rc)
+        );
+    }
+
 }
 
 static void closeKa9qChannel(const Config& cfg, Logger& log) {
@@ -258,21 +270,8 @@ static std::string resolveRelativeToBaseDir(const std::string& path) {
 }
 
 static void applyRuntimeDefaults(Config& cfg) {
-    // Default layout:
-    //   <wsrx directory>/wsrx
-    //   <wsrx directory>/config.ini
-    //   <wsrx directory>/decoder/rs41mod
-    //   <wsrx directory>/decoder/dfm09mod
-    //   <wsrx directory>/decoder/m10m20mod
-    //   <wsrx directory>/decoder/imet4iq
-    //   <wsrx directory>/decoder/dft_detect
-    //
-    // Relative decoder paths from config.ini or CLI are resolved against the
-    // directory where the running wsrx binary is located, not against the
-    // current working directory.
     if (cfg.decoder_dir.empty()) cfg.decoder_dir = "decoder";
     cfg.decoder_dir = resolveRelativeToBaseDir(cfg.decoder_dir);
-
 }
 
 static std::string lowerCopy(std::string s) {
@@ -287,6 +286,8 @@ static std::string normalizeDecoderName(const std::string& decoder) {
     if (d.find("m10") != std::string::npos) return "m10";
     if (d.find("m20") != std::string::npos) return "m20";
     if (d.find("imet") != std::string::npos) return "imet";
+    if (d.find("meisei") != std::string::npos) return "meisei";
+    if (d.find("c34c50") != std::string::npos) return "c34c50";
     return d;
 }
 
@@ -297,6 +298,8 @@ static std::string decoderLabel(const std::string& decoder) {
     if (d == "m10") return "M10";
     if (d == "m20") return "M20";
     if (d == "imet") return "IMET";
+    if (d == "meisei") return "IMS100";
+    if (d == "c34c50") return "c34c50";
     return decoder;
 }
 
@@ -306,6 +309,8 @@ static void validateRequiredDecoderFiles(const Config& cfg) {
         "dfm09mod",
         "m10m20mod",
         "imet4iq",
+        "meisei100mod",
+        "c50iq",
         "dft_detect"
     };
 
@@ -324,6 +329,8 @@ static std::string decoderCommandPath(const Config& cfg, const std::string& deco
     if (d == "m10") return joinPath(cfg.decoder_dir, "m10m20mod");
     if (d == "m20") return joinPath(cfg.decoder_dir, "m10m20mod");
     if (d == "imet") return joinPath(cfg.decoder_dir, "imet4iq");
+    if (d == "meisei") return joinPath(cfg.decoder_dir, "meisei100mod");
+    if (d == "c34c50") return joinPath(cfg.decoder_dir, "c50iq");
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -334,6 +341,8 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     if (d == "m10") return expandDecoderArgs("-vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "m20") return expandDecoderArgs(" -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "imet") return expandDecoderArgs("--json --iq {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "meisei") return expandDecoderArgs("--json --dc --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "c34c50") return expandDecoderArgs("--json --ptu --xor-auto --lpIQ --dc --iq {iq_offset} - {sample_rate} 16", cfg);
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -387,6 +396,8 @@ public:
 
         std::string line;
         int count = 0;
+        int skipped_stale = 0;
+        const std::time_t now = std::time(nullptr);
         while (std::getline(in, line)) {
             if (line.empty() || line[0] == '#') continue;
             std::istringstream iss(line);
@@ -396,12 +407,17 @@ public:
             if (!(iss >> key >> offset >> ts)) continue;
             if (!std::isfinite(offset)) continue;
             if (std::fabs(offset) > 25000.0) continue;
+            if (now - static_cast<std::time_t>(ts) > MAX_AGE_SEC) {
+                ++skipped_stale;
+                continue;
+            }
             cache_[key] = LearnedOffset{offset, static_cast<std::time_t>(ts)};
             ++count;
         }
-        if (count > 0) {
+        if (count > 0 || skipped_stale > 0) {
             std::ostringstream msg;
-            msg << "loaded " << count << " learned frequency offset(s) from " << path_;
+            msg << "loaded " << count << " learned frequency offset(s) from " << path_
+                << " (" << skipped_stale << " stale entries dropped)";
             //log.info(msg.str());
         }
     }
@@ -412,6 +428,8 @@ public:
         auto it = cache_.find(key);
         if (it == cache_.end()) return std::nullopt;
         if (!std::isfinite(it->second.offset_hz)) return std::nullopt;
+        const std::time_t age_sec = std::time(nullptr) - it->second.updated;
+        if (age_sec > MAX_AGE_SEC) return std::nullopt;
         return it->second.offset_hz;
     }
 
@@ -440,12 +458,19 @@ public:
             << " MHz tx=" << tx_mhz << " MHz)";
         if (changed) log.info(msg.str()); else log.debug(msg.str());
 
-        // Always write the cache after a successful frame. This guarantees that
-        // offset_cache.txt is created even if the learned value did not change.
-        save(log);
+        const auto steady_now = std::chrono::steady_clock::now();
+        const bool due_for_periodic_save = last_save_.time_since_epoch().count() == 0 ||
+            std::chrono::duration_cast<std::chrono::seconds>(steady_now - last_save_).count() >= SAVE_MIN_INTERVAL_SEC;
+        if (changed || due_for_periodic_save) {
+            save(log);
+            last_save_ = steady_now;
+        }
     }
 
 private:
+    static constexpr long long MAX_AGE_SEC = 7 * 24 * 3600; // 7 days
+    static constexpr int SAVE_MIN_INTERVAL_SEC = 30;
+
     static long long keyFor(double mhz, int quantization_hz) {
         long long hz = static_cast<long long>(std::llround(mhz * 1000000.0));
         long long q = std::max(1000, quantization_hz);
@@ -470,6 +495,7 @@ private:
     std::string path_;
     std::map<long long, LearnedOffset> cache_;
     mutable std::mutex mutex_;
+    std::chrono::steady_clock::time_point last_save_{}; // epoch => "never saved yet"
 };
 
 static std::optional<ScanDetection> parseDftDetectOutput(const std::string& output, double frequency_mhz) {
@@ -540,8 +566,6 @@ static std::vector<SpectrumBin> readKa9qPowerCsv(const std::string& path, Logger
     while (std::getline(in, line)) {
         if (line.empty()) continue;
 
-        // KA9Q powers writes a header first. Data lines look like:
-        // datetime,start_freq,stop_freq,step,n_samples,p0,p1,...
         if (first_line) {
             first_line = false;
             if (line.find("start") != std::string::npos || line.find("freq") != std::string::npos) continue;
@@ -668,19 +692,17 @@ static void writeScanSpectrumJson(const std::string& base_dir,
 
 
 
-static bool isBlacklistedFrequencyHz(const Config& cfg, double frequency_hz) {
-    if (cfg.scan_blacklist_mhz.empty()) return false;
-    const double width_hz = std::max(0.0, cfg.scan_blacklist_width_khz) * 1000.0;
-    for (double bl_mhz : cfg.scan_blacklist_mhz) {
-        if (!std::isfinite(bl_mhz) || bl_mhz <= 0.0) continue;
-        const double bl_hz = bl_mhz * 1000000.0;
-        if (std::fabs(frequency_hz - bl_hz) <= width_hz) return true;
+static bool isNeverScanFrequencyHz(const Config& cfg, double frequency_hz) {
+    const double width_hz = std::max(0.0, cfg.scan_active_skip_width_khz) * 1000.0;
+    for (double mhz : cfg.scan_never_mhz) {
+        if (!std::isfinite(mhz) || mhz <= 0.0) continue;
+        if (std::fabs(frequency_hz - mhz * 1000000.0) <= width_hz) return true;
     }
     return false;
 }
 
-static bool isBlacklistedFrequencyMhz(const Config& cfg, double frequency_mhz) {
-    return isBlacklistedFrequencyHz(cfg, frequency_mhz * 1000000.0);
+static bool isNeverScanFrequencyMhz(const Config& cfg, double frequency_mhz) {
+    return isNeverScanFrequencyHz(cfg, frequency_mhz * 1000000.0);
 }
 static void writeLiveSpectrumJson(const std::string& base_dir,
                                   const std::vector<SpectrumBin>& spectrum,
@@ -779,6 +801,19 @@ static void writeScanPeaksJson(const std::string& base_dir,
 }
 
 static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+    if (!cfg.scan_only_mhz.empty()) {
+        std::vector<double> direct_hz;
+        for (double mhz : cfg.scan_only_mhz) {
+            if (!std::isfinite(mhz) || mhz <= 0.0) continue;
+            if (isNeverScanFrequencyMhz(cfg, mhz)) continue;
+            direct_hz.push_back(mhz * 1e6);
+        }
+        if (cfg.verbose || cfg.decoder_debug) {
+            log.debug("scan only_scan mode: testing " + std::to_string(direct_hz.size()) + " configured frequencies");
+        }
+        return direct_hz;
+    }
+
     const std::string powers = "powers";
     long long start_hz = freqHz(cfg.scan_min_mhz);
     long long stop_hz = freqHz(cfg.scan_max_mhz);
@@ -823,19 +858,9 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
     double nf = medianPower(spectrum);
     double trigger = nf + cfg.scan_threshold_db;
     std::ostringstream nfmsg;
-    //nfmsg << "scan noise_floor=" << nf << " dB threshold=" << cfg.scan_threshold_db << " dB trigger=" << trigger << " dB bins=" << spectrum.size();
+
     nfmsg << "scan noise_floor=" << nf << " dB threshold=" << cfg.scan_threshold_db << " dB trigger=" << trigger << " dB ";
     log.info(nfmsg.str());
-    if (!cfg.scan_blacklist_mhz.empty()) {
-        std::ostringstream blmsg;
-        blmsg << "scan blacklist=";
-        for (size_t i = 0; i < cfg.scan_blacklist_mhz.size(); ++i) {
-            if (i) blmsg << ",";
-            blmsg << cfg.scan_blacklist_mhz[i];
-        }
-        blmsg << " MHz +/-" << cfg.scan_blacklist_width_khz << " kHz";
-        //log.info(blmsg.str());
-    }
 
     auto addPeakIndex = [&](std::vector<size_t>& list, size_t idx) {
         const double min_dist_hz = static_cast<double>(cfg.scan_min_distance_hz);
@@ -863,7 +888,7 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
 
     std::vector<size_t> peak_idx;
     for (size_t i = 1; i + 1 < spectrum.size(); ++i) {
-        if (isBlacklistedFrequencyHz(cfg, spectrum[i].frequency_hz)) continue;
+        if (isNeverScanFrequencyHz(cfg, spectrum[i].frequency_hz)) continue;
         if (spectrum[i].power_db < trigger) continue;
         if (spectrum[i].power_db < spectrum[i - 1].power_db) continue;
         if (spectrum[i].power_db < spectrum[i + 1].power_db) continue;
@@ -878,7 +903,6 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
     bool used_fallback = false;
     if (peak_idx.empty()) {
         if (!allow_fallback_candidates || cfg.scan_fallback_candidates <= 0) {
-            //log.info("scan spectrum: no peaks above threshold");
             writeScanSpectrumJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
             writeScanPeaksJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
             return {};
@@ -896,7 +920,7 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
             return spectrum[a].power_db > spectrum[b].power_db;
         });
         for (size_t idx : all_idx) {
-            if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
+            if (isNeverScanFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
             const double snr = spectrum[idx].power_db - nf;
             if (snr < cfg.scan_fallback_min_snr_db) break;
             if (!peakWidthOk(idx)) continue;
@@ -916,7 +940,7 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
     std::vector<double> peaks_hz;
     std::vector<double> quantized_hz;
     for (size_t idx : peak_idx) {
-        if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
+        if (isNeverScanFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
         double q = static_cast<double>(cfg.scan_quantization_hz);
         double raw_f = spectrum[idx].frequency_hz;
         double q_f = std::round(raw_f / q) * q;
@@ -938,13 +962,31 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
         log.info(msg.str());
     }
 
-    if (peaks_hz.empty()) log.info("scan spectrum: no usable candidates");
-    return peaks_hz;
+    std::vector<double> ordered_hz;
+    std::vector<double> ordered_quantized_hz;
+    auto appendUnique = [&](double hz) {
+        if (!std::isfinite(hz) || hz <= 0.0) return;
+        if (isNeverScanFrequencyHz(cfg, hz)) return;
+        const double q = static_cast<double>(cfg.scan_quantization_hz);
+        const double qhz = std::round(hz / q) * q;
+        for (double old_qhz : ordered_quantized_hz) {
+            if (std::fabs(old_qhz - qhz) < q / 2.0) return;
+        }
+        ordered_quantized_hz.push_back(qhz);
+        ordered_hz.push_back(hz);
+    };
+    for (double mhz : cfg.scan_always_mhz) appendUnique(mhz * 1e6);
+    for (double hz : peaks_hz) appendUnique(hz);
+
+    if (ordered_hz.empty()) log.info("scan spectrum: no usable candidates");
+    return ordered_hz;
 }
 
 static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log) {
     cfg.frequency_mhz = frequency_mhz;
-    const std::string ssrc = ka9qSsrc(frequency_mhz, 4);
+
+    const int suffix = 20 + static_cast<int>(g_scan_ssrc_sequence.fetch_add(1, std::memory_order_relaxed) % 70u);
+    const std::string ssrc = ka9qSsrc(frequency_mhz, suffix);
     const std::string dft_detect = joinPath(cfg.decoder_dir, "dft_detect");
 
     if (!fileExists(dft_detect)) {
@@ -958,7 +1000,8 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     }
 
     std::string tune_cmd = buildKa9qTuneCommandFor(cfg, frequency_mhz, ssrc, cfg.scan_tune_timeout_sec);
-    int tune_rc = std::system((tune_cmd + " >/dev/null 2>&1").c_str());
+
+    const int tune_rc = std::system((tune_cmd + " >/dev/null 2>&1").c_str());
     if (tune_rc != 0) {
         if (cfg.decoder_debug) {
             std::ostringstream msg;
@@ -975,7 +1018,7 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
         << " --catmode --raw " << shellQuote(cfg.ka9q_pcm)
         << " | " << shellQuote(dft_detect)
         << " -t " << cfg.scan_detect_dwell_sec
-        << " --types RS41,DFM9,M10,IMET4"
+        << " --types RS41,DFM9,M10,IMET4,MEISEI,C34C50"
         << " --iq --bw 15 --dc - "
         << cfg.sample_rate << " 16 2>/dev/null";
 
@@ -1013,7 +1056,6 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
         return std::nullopt;
     }
 
-    // If dft_detect reports an internal frequency correction, apply it to the tested frequency.
     if (std::fabs(det->offset_hz) > 0.1) {
         det->frequency_mhz = frequency_mhz + det->offset_hz / 1000000.0;
     } else {
@@ -1033,8 +1075,6 @@ static void addUniqueOffset(std::vector<double>& offsets, double value) {
 static std::vector<double> buildOffsetTrialsHz(const Config& cfg, std::optional<double> learned_offset_hz) {
     std::vector<double> offsets;
 
-    // Learned offset first: if we previously decoded this channel and saw that
-    // tx_frequency differs from the tuned frequency, try that correction first.
     if (learned_offset_hz && std::isfinite(*learned_offset_hz) && std::fabs(*learned_offset_hz) <= 25000.0) {
         addUniqueOffset(offsets, *learned_offset_hz);
     }
@@ -1048,7 +1088,6 @@ static std::vector<double> buildOffsetTrialsHz(const Config& cfg, std::optional<
         addUniqueOffset(offsets, static_cast<double>(-hz));
     }
 
-    // Legacy fallback value: keep it as an extra trial if set, but do not blindly apply it.
     if (std::fabs(cfg.scan_decoder_offset_hz) > 0.1) {
         addUniqueOffset(offsets, cfg.scan_decoder_offset_hz);
     }
@@ -1080,10 +1119,6 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
         auto det = runSingleScanDetection(cfg, trial_mhz, log);
         if (!det) continue;
 
-        // Prefer the strongest score. dft_detect may use negative score for inverted variants,
-        // so compare absolute values. If scores are nearly identical, prefer the
-        // candidate nearest to the measured spectrum peak. This avoids accepting
-        // a mirrored +/- offset too early.
         double score = std::isnan(det->score) ? 0.0 : std::fabs(det->score);
         double candidate_offset_hz = (det->frequency_mhz - peak_mhz) * 1000000.0;
         double current_offset_hz = best ? best->offset_hz : 1e99;
@@ -1095,8 +1130,6 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
             take = true;
         } else if (std::fabs(score - best_score) <= score_margin) {
             if (learned) {
-                // If we have learned an offset from previous decoded frames, prefer
-                // the candidate closest to it when scores are essentially equal.
                 take = std::fabs(candidate_offset_hz - *learned) < std::fabs(current_offset_hz - *learned);
             } else {
                 take = std::fabs(candidate_offset_hz) < std::fabs(current_offset_hz);
@@ -1106,6 +1139,18 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
             best = det;
             best_score = score;
             best->offset_hz = candidate_offset_hz;
+        }
+
+        const bool is_learned_trial = learned.has_value() && std::fabs(off_hz - *learned) < 0.5;
+        if (is_learned_trial && best_score >= cfg.scan_accept_score) {
+            if (cfg.verbose) {
+                std::ostringstream msg;
+                msg << "scan early-accept " << best->sonde_type << " near " << peak_mhz
+                    << " MHz score=" << best_score << " >= accept_score=" << cfg.scan_accept_score
+                    << " (learned offset confirmed, skipped remaining offset trials)";
+                log.debug(msg.str());
+            }
+            break;
         }
     }
 
@@ -1191,7 +1236,7 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
                     << " lat=" << frame->lat
                     << " lon=" << frame->lon
                     << " alt=" << frame->alt_m;
-                log.info(msg.str());
+                //log.info(msg.str());
 
                 if (base_cfg.scan_enabled && std::isfinite(frame->tx_frequency_mhz) && frame->tx_frequency_mhz > 0.0) {
                     offset_cache.update(frame->tx_frequency_mhz, ch->cfg.frequency_mhz, base_cfg.scan_quantization_hz, log);
@@ -1237,80 +1282,115 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
     }
     if (static_cast<int>(active_count) >= cfg.scan_max_channels) return;
 
-    std::ostringstream startmsg;
-    startmsg << "scan range=" << cfg.scan_min_mhz << "-" << cfg.scan_max_mhz
-             << " MHz spectrum_bin=" << cfg.scan_power_bin_hz << " Hz"
-             << " snr_threshold=" << cfg.scan_threshold_db << " dB"
-             << " active_channels=" << active_count << "/" << cfg.scan_max_channels;
-    //log.info(startmsg.str());
-
     const bool allow_fallback_candidates = (active_count == 0) || cfg.scan_fallback_when_active;
     std::vector<double> peak_hz = runKa9qPowerScan(cfg, log, allow_fallback_candidates);
     if (peak_hz.empty()) return;
 
-    int detections = 0;
+    // Cheap, non-subprocess pre-filtering first.
+    std::vector<double> candidates;
+    candidates.reserve(peak_hz.size());
     for (double peak : peak_hz) {
-        if (g_shutdown) break;
-
-        double f_mhz = peak / 1e6;
-        if (isBlacklistedFrequencyMhz(cfg, f_mhz)) {
+        const double f_mhz = peak / 1e6;
+        if (isNeverScanFrequencyMhz(cfg, f_mhz)) {
             std::ostringstream msg;
-            msg << "scan skip blacklisted peak " << f_mhz << " MHz";
+            msg << "scan skip never-scan peak " << f_mhz << " MHz";
             log.debug(msg.str());
             continue;
         }
-        {
-            std::lock_guard<std::mutex> lock(channels_mutex);
-            if (static_cast<int>(channels.size()) >= cfg.scan_max_channels) break;
-            if (frequencyAlreadyActiveLocked(channels, f_mhz, cfg.scan_active_skip_width_khz)) {
-                std::ostringstream msg;
-                msg << "scan skip active peak " << f_mhz << " MHz";
-                log.debug(msg.str());
-                continue;
+        candidates.push_back(f_mhz);
+    }
+    if (candidates.empty()) return;
+
+    const int max_parallel = std::max(1, cfg.scan_parallel_detections);
+
+    struct Trial {
+        double f_mhz;
+        std::future<std::optional<ScanDetection>> fut;
+    };
+    std::vector<Trial> inflight;
+    size_t next_idx = 0;
+    int detections = 0;
+
+    auto tryLaunchMore = [&]() {
+        while (next_idx < candidates.size() && inflight.size() < static_cast<size_t>(max_parallel)) {
+            const double f_mhz = candidates[next_idx++];
+            {
+                std::lock_guard<std::mutex> lock(channels_mutex);
+                if (static_cast<int>(channels.size()) >= cfg.scan_max_channels) return;
+                if (frequencyAlreadyActiveLocked(channels, f_mhz, cfg.scan_active_skip_width_khz)) {
+                    std::ostringstream msg;
+                    msg << "scan skip active peak " << f_mhz << " MHz";
+                    log.debug(msg.str());
+                    continue;
+                }
             }
+            inflight.push_back(Trial{
+                f_mhz,
+                std::async(std::launch::async, [&cfg, f_mhz, &log, &offset_cache]() {
+                    return runScanDetection(cfg, f_mhz, log, offset_cache);
+                })
+            });
+        }
+    };
+
+    tryLaunchMore();
+
+    while (!inflight.empty()) {
+        if (g_shutdown) break;
+
+        bool progressed = false;
+        for (size_t i = 0; i < inflight.size(); ++i) {
+            if (inflight[i].fut.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) continue;
+
+            const double f_mhz = inflight[i].f_mhz;
+            auto det = inflight[i].fut.get();
+            inflight.erase(inflight.begin() + static_cast<long>(i));
+            progressed = true;
+
+            if (det) {
+                ++detections;
+                const std::string decoder_name = normalizeDecoderName(det->sonde_type);
+                if (decoder_name != "rs41" && decoder_name != "dfm" && decoder_name != "m10" &&
+                    decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei") {
+                    std::ostringstream unsupported;
+                    unsupported << "scan detected unsupported sonde " << det->sonde_type
+                                << " near " << f_mhz << " MHz";
+                    log.warn(unsupported.str());
+                } else {
+                    const double start_freq = det->frequency_mhz;
+                    std::lock_guard<std::mutex> lock(channels_mutex);
+                    if (static_cast<int>(channels.size()) < cfg.scan_max_channels &&
+                        !frequencyAlreadyActiveLocked(channels, start_freq, cfg.scan_active_skip_width_khz)) {
+                        Config chcfg = cfg;
+                        chcfg.scan_enabled = false;
+                        chcfg.frequency_mhz = start_freq;
+                        chcfg.decoder = decoder_name;
+
+                        std::ostringstream hit;
+                        hit << "scan detected " << det->sonde_type << " at " << f_mhz << " MHz";
+                        if (std::fabs(det->offset_hz) > 0.1) {
+                            hit << " offset=" << det->offset_hz << " Hz -> " << start_freq << " MHz";
+                        }
+                        if (!std::isnan(det->score)) hit << " score=" << det->score;
+                        log.info(hit.str());
+
+                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, offset_cache);
+                        channels.push_back(std::move(ch));
+                    }
+                }
+            }
+
+            tryLaunchMore();
+            break;
         }
 
-        auto det = runScanDetection(cfg, f_mhz, log, offset_cache);
-        if (!det) continue;
-        ++detections;
-
-        if (normalizeDecoderName(det->sonde_type) != "rs41" && normalizeDecoderName(det->sonde_type) != "dfm" &&
-            normalizeDecoderName(det->sonde_type) != "m10" && normalizeDecoderName(det->sonde_type) != "m20" &&
-            normalizeDecoderName(det->sonde_type) != "imet") {
-            std::ostringstream unsupported;
-            unsupported << "scan detected unsupported sonde " << det->sonde_type
-                        << " near " << f_mhz << " MHz";
-            log.warn(unsupported.str());
-            continue;
-        }
-
-        double start_freq = det->frequency_mhz;
-        {
-            std::lock_guard<std::mutex> lock(channels_mutex);
-            if (static_cast<int>(channels.size()) >= cfg.scan_max_channels) break;
-            if (frequencyAlreadyActiveLocked(channels, start_freq, cfg.scan_active_skip_width_khz)) continue;
-
-            Config chcfg = cfg;
-            chcfg.scan_enabled = false;
-            chcfg.frequency_mhz = start_freq;
-            chcfg.decoder = normalizeDecoderName(det->sonde_type);
-
-            std::ostringstream hit;
-            hit << "scan detected " << det->sonde_type << " at " << f_mhz << " MHz";
-            if (std::fabs(det->offset_hz) > 0.1) hit << " offset=" << det->offset_hz << " Hz -> " << start_freq << " MHz";
-            //if (!std::isnan(det->score)) hit << " score=" << det->score;
-            log.info(hit.str());
-
-            auto ch = startChannelWithReader(chcfg, cfg, log, uploader, offset_cache);
-            channels.push_back(std::move(ch));
-        }
+        if (!progressed) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     if (detections == 0) {
         log.info("scan finished: no radiosonde signatures detected on peaks");
     }
 }
-
 
 static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
@@ -1421,9 +1501,6 @@ int main(int argc, char** argv) {
                 << " MHz step=" << cfg.scan_step_khz << " kHz max_channels=" << cfg.scan_max_channels;
             log.info(msg.str());
         }
-        //log.info("ka9q_radio=" + cfg.ka9q_radio + " ka9q_pcm=" + cfg.ka9q_pcm);
-        //log.info("decoder_dir=" + cfg.decoder_dir);
-        //log.info("config=" + cfg.config_file);
 
         uploader.maybeSendReceiverPosition();
 
@@ -1436,7 +1513,6 @@ int main(int argc, char** argv) {
         scan_thread = std::thread(scanWorkerThread, std::cref(cfg), std::ref(log), std::ref(channels),
                                   std::ref(channels_mutex), std::ref(uploader), std::ref(offset_cache));
 
-        //log.info("threading enabled: live spectrum thread, scan thread and one reader thread per decoder channel");
 
         while (!g_shutdown) {
             uploader.maybeSendReceiverPosition();

@@ -18,6 +18,7 @@ public:
 
 private:
     bool allowedByRateLimit(const std::string& serial);
+    bool hasGpsFix(const TelemetryFrame& frame) const;
     bool validTypeSerial(const TelemetryFrame& frame) const;
     std::string buildTelemetryPostData(const TelemetryFrame& frame) const;
     bool postWithCurl(const std::string& url, const std::string& data);

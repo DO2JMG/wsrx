@@ -41,9 +41,6 @@ bool DecoderProcess::start(const std::string& command) {
         _exit(127);
     }
 
-    // Put the child into its own process group from the parent side too.
-    // The child also calls setpgid(0, 0), but doing it here avoids a race
-    // where stop() could run before the child reached setpgid().
     setpgid(pid_, pid_);
 
     close(pipefd[1]);
@@ -55,8 +52,6 @@ bool DecoderProcess::start(const std::string& command) {
 void DecoderProcess::stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (pid_ > 0) {
-        // Terminate the whole shell pipeline, not just /bin/sh.
-        // pcmrecord and rs41mod inherit the same process group.
         kill(-pid_, SIGTERM);
 
         bool exited = false;

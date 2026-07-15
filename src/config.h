@@ -40,15 +40,18 @@ struct Config {
     int scan_quantization_hz = 10000;
     int scan_min_distance_hz = 1000;
     int scan_min_peak_width_hz = 5000;
-    std::vector<double> scan_blacklist_mhz;
-    double scan_blacklist_width_khz = 5.0;
+    std::vector<double> scan_only_mhz;
+    std::vector<double> scan_always_mhz;
+    std::vector<double> scan_never_mhz;
+    double scan_never_scan_width_khz = 5.0;
     double scan_active_skip_width_khz = 5.0;
     int scan_max_peaks = 10;
+    int scan_parallel_detections = 3;
     double scan_accept_score = 0.90;
     bool scan_fallback_when_active = false;
     int scan_fallback_candidates = 0;
     double scan_fallback_min_snr_db = 8.0;
-    double scan_decoder_offset_hz = 0.0; // legacy fallback; normally keep 0 and use offset search
+    double scan_decoder_offset_hz = 0.0; 
     int scan_offset_search_hz = 5000;
     int scan_offset_step_hz = 1000;
     int scan_max_channels = 4;
