@@ -2,6 +2,8 @@
 
 With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radiosondes are automatically detected by the scanner.
 
+The software is still under development, and there may still be some bugs.
+
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
 
 <p>&nbsp;</p>
