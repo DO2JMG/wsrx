@@ -31,6 +31,10 @@ cd wsrx
 
 make clean
 make
+
+cd decoder
+make clean
+make
 ```
 
 ### Configuring wsrx
@@ -43,37 +47,34 @@ Change your call sign and your coordinates. The call sign does not have to be an
 
 ```
 [station]
-callsign = DO2JMG
-lat = 52.014168
-lon = 8.474337
+callsign = NOCALL
+lat = 52.123456
+lon = 8.123456
 alt = 100
 ```
 
 Make the executables and start scripts executable:
 
 ```
-chmod +x /home/pi/wsrx/wsrx /home/pi/wsrx/wsrx-web /home/pi/wsrx/wsrx.sh /home/pi/wsrx/wsrx-web.sh
+chmod +x /home/pi/wsrx/wsrx.sh
 ```
 
 ### Starting wsrx and the web interface
 
 KA9Q must be fully installed before wsrx is started.
 
-Start wsrx manually for the first test:
+Start wsrx manually:
 
 ```
 cd /home/pi/wsrx
-./wsrx.sh start
-./wsrx.sh status
-./wsrx.sh log
+./wsrx.sh 
 ```
 
-Start the web interface:
+Stop wsrx manually:
 
 ```
 cd /home/pi/wsrx
-./wsrx-web.sh start
-./wsrx-web.sh status
+./wsrx.sh stop
 ```
 
 The web interface listens on port 8073 by default. Open it in your browser with the IP address of your receiver, for example:
