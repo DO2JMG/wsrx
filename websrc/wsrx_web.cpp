@@ -460,7 +460,10 @@ static void handle_client(int fd, const App &app) {
         else {
             std::string action = path.substr(std::string("/api/").size());
             int rc = 0;
-            std::string out = run_cmd(shell_quote(app.script) + " " + action, &rc);
+            // Always target "wsrx" explicitly. Without a target, wsrx.sh
+            // controls BOTH wsrx and wsrx-web -- which would make this very
+            // request kill/restart the web server that is handling it.
+            std::string out = run_cmd(shell_quote(app.script) + " " + action + " wsrx", &rc);
             send_response(fd, rc == 0 ? 200 : 500, "text/plain", out);
         }
     } else {
