@@ -80,7 +80,8 @@ chmod +x /home/pi/wsrx/wsrx.sh
 
 ### Starting wsrx and the web interface
 
-KA9Q must be fully installed before wsrx is started.
+> [!WARNING]
+> KA9Q must be fully installed before wsrx is started.
 
 Start wsrx manually:
 
