@@ -1,4 +1,4 @@
-### wsrx Radiosonde decoder, monitoring, scan and decoder status
+## wsrx Radiosonde decoder, monitoring, scan and decoder status
 
 With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radiosondes are automatically detected by the scanner.
 
@@ -8,7 +8,7 @@ The software is still under development, and there may still be some bugs.
 
 <p>&nbsp;</p>
 
-### Radiosonde Support Matrix
+## Radiosonde Support Matrix
 
 | Manufacturer | Model              | Position | Temperature | Humidity | Pressure         |
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
@@ -26,7 +26,7 @@ The C50 has not been tested.
 
 This guide installs KA9Q Radio, the wsrx radiosonde receiver software and the required decoder programs. wsrx uses KA9Q as SDR backend and expects all decoder binaries in the decoder subdirectory next to the wsrx application.
 
-### Requirements
+## Requirements
 
 The installation is intended for Linux systems such as Raspberry Pi OS, Debian or Ubuntu with an Airspy Mini receiver. Run the commands as a user with sudo rights.
 
@@ -39,7 +39,7 @@ sudo apt install -y avahi-utils build-essential make gcc g++ git wget unzip rsyn
   uuid-dev libsamplerate-dev
 ```
 
-### Installing wsrx
+## Installing wsrx
 
 ```
 cd $home
@@ -56,7 +56,7 @@ make clean
 make
 ```
 
-### Configuring wsrx
+## Configuring wsrx
 
 ```
 nano /home/pi/wsrx/config.ini
@@ -78,7 +78,7 @@ Make the executables and start scripts executable:
 chmod +x /home/pi/wsrx/wsrx.sh
 ```
 
-### Starting wsrx and the web interface
+## Starting wsrx and the web interface
 
 > [!WARNING]
 > KA9Q must be fully installed before wsrx is started.
@@ -103,7 +103,7 @@ The web interface listens on port 8073 by default. Open it in your browser with 
 http://receiver-ip-address:8073/
 ```
 
-### Installing KA9Q Radio
+## Installing KA9Q Radio
 
 KA9Q Radio is used as the SDR backend. The example below builds KA9Q from source and installs it system-wide.
 
@@ -130,7 +130,7 @@ sudo fftwf-wisdom -v -T 1 -o nwisdom rof300000 cob2400 cob1250 cob1202 cob1200
 sudo cp -i nwisdom wisdomf
 ```
 
-### Configuring KA9Q for Airspy Mini
+## Configuring KA9Q for Airspy Mini
 
 
 
@@ -183,7 +183,7 @@ systemctl status radiod@wettersonde_rx --no-pager
 avahi-browse -art | grep -E "wettersonde|ka9q|pcm"
 ```
 
-### Optional: systemd service files
+## Optional: systemd service files
 
 The included start scripts already write log files into the wsrx directory. If you want wsrx and the web interface to start automatically after boot, create these systemd services.
 
