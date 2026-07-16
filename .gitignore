@@ -1,0 +1,27 @@
+# Build artifacts
+*.o
+/wsrx
+/wsrx-web
+/decoder/rs41mod
+/decoder/dfm09mod
+/decoder/m10m20mod
+/decoder/imet4iq
+/decoder/meisei100mod
+/decoder/c50iq
+/decoder/dft_detect
+
+# Runtime-generated data, not source
+/data/*.json
+/logs/
+/offset_cache.txt
+/pidfiles/
+
+# Update backups
+/backups/
+
+# Editor/OS cruft
+*.swp
+.DS_Store
+
+# Misc local artifacts seen in `git status` that shouldn't be tracked
+/src/src.zip
