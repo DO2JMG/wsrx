@@ -131,13 +131,15 @@ sudo cp -i nwisdom wisdomf
 
 ### Configuring KA9Q for Airspy Mini
 
-Create the KA9Q radiod configuration:
+
 
 Create a udev rule for Airspy
 
 ```
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", GROUP="radio", MODE="0660"' | sudo tee /etc/udev/rules.d/52-airspy-radio.rules
 ```
+
+Create the KA9Q radiod configuration:
 
 ```
 sudo nano /etc/radio/radiod@wettersonde_rx.conf
