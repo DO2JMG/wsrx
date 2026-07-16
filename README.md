@@ -76,6 +76,7 @@ Make the executables and start scripts executable:
 
 ```
 chmod +x /home/pi/wsrx/wsrx.sh
+chmod +x /home/pi/wsrx/update.sh
 ```
 
 ## Starting wsrx and the web interface
@@ -101,6 +102,12 @@ The web interface listens on port 8073 by default. Open it in your browser with 
 
 ```
 http://receiver-ip-address:8073/
+```
+
+Update wsrx:
+
+```
+./update.sh
 ```
 
 ## Installing KA9Q Radio
