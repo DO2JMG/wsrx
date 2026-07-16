@@ -133,14 +133,14 @@ sudo cp -i nwisdom wisdomf
 
 Create the KA9Q radiod configuration:
 
-```
-sudo nano /etc/radio/radiod@wettersonde_rx.conf
-```
-
 Create a udev rule for Airspy
 
 ```
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="60a1", GROUP="radio", MODE="0660"' | sudo tee /etc/udev/rules.d/52-airspy-radio.rules
+```
+
+```
+sudo nano /etc/radio/radiod@wettersonde_rx.conf
 ```
 
 ```
