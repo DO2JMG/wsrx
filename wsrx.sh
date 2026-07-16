@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# wsrx.sh - manages both wsrx and its wsrx-web companion.
-# Usage: wsrx.sh {start|stop|restart|status|log} [wsrx|web]
-# Without a target, the command applies to both wsrx and wsrx-web.
-# Without arguments at all, it starts both if not already running.
-
 workingdir="$( cd "$(dirname "$0")" ; pwd -P )"
 piddir="${workingdir}/pidfiles"
 logdir="${workingdir}/logs"
