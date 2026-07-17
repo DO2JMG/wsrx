@@ -275,11 +275,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (id) f.serial = *id;
     if (ser) f.serial = *ser;
     if (type) f.type = normalizeDFM(*type);
-    // subtype (e.g. "0x20" for M20) is only meaningful/used for RS41, where it
-    // encodes the exact variant (RS41-SG/SGP/...) that is uploaded as the type.
-    // For all other sonde types it must NOT overwrite the already-detected type,
-    // otherwise M10/M20/etc. get misclassified (wrong upload type, broken serial
-    // normalization).
+
     if (subtype) {
         const std::string upper_type_for_subtype = upperCopy(f.type);
         if (upper_type_for_subtype.find("RS41") != std::string::npos) {
@@ -365,11 +361,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         f.type = "IMET";
         f.serial = normalizeImet(f.serial, f.frame, f.timestamp_hhmmss);
     } else if (normalized_type_upper.find("M10") != std::string::npos || normalized_type_upper.find("M20") != std::string::npos) {
-        // Some decoders (e.g. for M10) already provide a ready-to-use "aprsid"
-        // (the "ME..." formatted serial) directly in the telemetry line. Prefer
-        // that over recomputing it ourselves, since it comes straight from the
-        // decoder with full knowledge of the raw frame bytes. Fall back to our
-        // own normalization (needed e.g. for M20, which doesn't provide aprsid).
+
         if (auto aprsid = extractString(line, "aprsid"); aprsid && !aprsid->empty()) {
             f.serial = *aprsid;
         } else {
