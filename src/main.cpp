@@ -800,7 +800,7 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
-static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
     if (!cfg.scan_only_mhz.empty()) {
         std::vector<double> direct_hz;
         for (double mhz : cfg.scan_only_mhz) {
@@ -980,6 +980,39 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
 
     if (ordered_hz.empty()) log.info("scan spectrum: no usable candidates");
     return ordered_hz;
+}
+
+// Wraps runKa9qPowerScanInner() and makes sure always_scan_mhz frequencies are
+// tried regardless of the inner scan's outcome. runKa9qPowerScanInner() has
+// several early-return paths (only_scan_mhz mode, failed/empty spectrum, no
+// peaks above threshold without fallback) that never reach its own
+// always_scan_mhz handling. Without this wrapper, "always" frequencies would
+// silently not be scanned whenever the spectrum scan itself didn't succeed.
+static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+    std::vector<double> result = runKa9qPowerScanInner(cfg, log, allow_fallback_candidates);
+
+    if (cfg.scan_always_mhz.empty()) return result;
+
+    const double q = static_cast<double>(cfg.scan_quantization_hz);
+    auto alreadyPresent = [&](double hz) {
+        for (double existing : result) {
+            if (std::fabs(existing - hz) < q / 2.0) return true;
+        }
+        return false;
+    };
+
+    for (double mhz : cfg.scan_always_mhz) {
+        if (!std::isfinite(mhz) || mhz <= 0.0) continue;
+        const double hz = mhz * 1e6;
+        if (isNeverScanFrequencyMhz(cfg, mhz)) continue;
+        if (alreadyPresent(hz)) continue;
+        if (cfg.verbose || cfg.decoder_debug) {
+            log.debug("scan always_scan_mhz: forcing candidate " + std::to_string(mhz) + " MHz");
+        }
+        result.push_back(hz);
+    }
+
+    return result;
 }
 
 static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log) {
