@@ -110,7 +110,7 @@ std::string normalizeM20Serial(const std::string& working_serial) {
 }
 
 std::string normalizeM10Serial(const std::string& working_serial) {
-    static const std::regex m10_re(R"(^([0-9A-Fa-f])([0-9]{2})-([0-9A-Fa-f])([0-9])([0-9]{4})$)");
+    static const std::regex m10_re(R"(^([0-9A-Fa-f])([0-9]{2})-([0-9A-Fa-f])-([0-9])([0-9]{4})$)");
     std::smatch m;
     if (!std::regex_match(working_serial, m, m10_re)) return working_serial;
 
@@ -275,7 +275,17 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (id) f.serial = *id;
     if (ser) f.serial = *ser;
     if (type) f.type = normalizeDFM(*type);
-    if (subtype) f.type = normalizeDFM(*subtype);
+    // subtype (e.g. "0x20" for M20) is only meaningful/used for RS41, where it
+    // encodes the exact variant (RS41-SG/SGP/...) that is uploaded as the type.
+    // For all other sonde types it must NOT overwrite the already-detected type,
+    // otherwise M10/M20/etc. get misclassified (wrong upload type, broken serial
+    // normalization).
+    if (subtype) {
+        const std::string upper_type_for_subtype = upperCopy(f.type);
+        if (upper_type_for_subtype.find("RS41") != std::string::npos) {
+            f.type = normalizeDFM(*subtype);
+        }
+    }
     if (auto dt = extractString(line, "datetime")) {
         f.raw_datetime = *dt;
         f.timestamp_hhmmss = hhmmssFromIsoUtc(*dt);
@@ -355,7 +365,16 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         f.type = "IMET";
         f.serial = normalizeImet(f.serial, f.frame, f.timestamp_hhmmss);
     } else if (normalized_type_upper.find("M10") != std::string::npos || normalized_type_upper.find("M20") != std::string::npos) {
-        f.serial = normalizeM10M20(f.serial, f.type);
+        // Some decoders (e.g. for M10) already provide a ready-to-use "aprsid"
+        // (the "ME..." formatted serial) directly in the telemetry line. Prefer
+        // that over recomputing it ourselves, since it comes straight from the
+        // decoder with full knowledge of the raw frame bytes. Fall back to our
+        // own normalization (needed e.g. for M20, which doesn't provide aprsid).
+        if (auto aprsid = extractString(line, "aprsid"); aprsid && !aprsid->empty()) {
+            f.serial = *aprsid;
+        } else {
+            f.serial = normalizeM10M20(f.serial, f.type);
+        }
     } else if (normalized_type_upper.find("MEISEI") != std::string::npos
                || normalized_type_upper.find("IMS100") != std::string::npos
                || normalized_type_upper.find("RS11G") != std::string::npos) {
