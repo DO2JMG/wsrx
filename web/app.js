@@ -193,7 +193,7 @@ function drawSpectrum(spec, peaksDoc) {
     ctx.setLineDash([]);
   }
 
-  ctx.strokeStyle = '#507ba8'; // Spectrum
+  ctx.strokeStyle = '#507ba8';
   ctx.lineWidth = 1 * dpr;
   ctx.beginPath();
   points.forEach((p, i) => {
@@ -297,6 +297,8 @@ async function refreshAll() {
   await refreshSpectrum();
   if (activeTab === 'log') setLogText(await getText('/api/log?lines=300'));
   if (activeTab === 'config') setText('configText', await getText('/api/config'));
+  if (activeTab === 'whitelist') setText('whitelistText', await getText('/api/whitelist'));
+  if (activeTab === 'blacklist') setText('blacklistText', await getText('/api/blacklist'));
   if (activeTab === 'offsets') setText('offsetText', await getText('/api/offsets'));
   if (activeTab === 'radiosondes') await refreshRadiosondes();
 }
@@ -330,3 +332,4 @@ document.getElementById('refreshBtn').addEventListener('click', refreshAll);
 window.addEventListener('resize', () => { if (lastSpectrum) drawSpectrum(lastSpectrum, lastPeaks); });
 setInterval(refreshAll, 500);
 refreshAll();
+
