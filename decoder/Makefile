@@ -23,6 +23,8 @@ meisei100mod: meisei100mod.o demod_mod.o bch_ecc_mod.o
 imet4iq: imet4iq.c
 >$(CC) $(CFLAGS) imet4iq.c -lm -o imet4iq
 
+windsondmod: windsondmod.o 
+
 dft_detect: dft_detect.c
 >$(CC) -Ofast -march=native dft_detect.c -lm -o dft_detect
 
