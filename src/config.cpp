@@ -95,7 +95,6 @@ std::vector<double> parseFrequencyListMhz(const std::string& value) {
             double mhz = std::stod(v);
             if (std::isfinite(mhz) && mhz > 0.0) out.push_back(mhz);
         } catch (...) {
-            // Ignore invalid frequency-list entries so one typo does not stop wsrx.
         }
     };
     for (char c : value) {
@@ -109,6 +108,37 @@ std::vector<double> parseFrequencyListMhz(const std::string& value) {
 std::vector<double> iniFrequencyListMhz(const std::unordered_map<std::string, std::string>& ini, const std::string& key) {
     auto it = ini.find(lower(key));
     return it == ini.end() ? std::vector<double>{} : parseFrequencyListMhz(it->second);
+}
+
+std::vector<double> loadFrequencyListFile(const std::string& path) {
+    std::vector<double> out;
+    if (path.empty()) return out;
+
+    std::ifstream in(path);
+    if (!in) {
+        throw std::runtime_error("Could not open frequency list file: " + path);
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t comment = line.find('#');
+        if (comment != std::string::npos) line = line.substr(0, comment);
+        line = trim(line);
+        if (line.empty()) continue;
+        for (double mhz : parseFrequencyListMhz(line)) out.push_back(mhz);
+    }
+    return out;
+}
+
+std::vector<double> mergeUniqueFrequenciesMhz(std::vector<double> base, const std::vector<double>& extra) {
+    for (double mhz : extra) {
+        bool present = false;
+        for (double existing : base) {
+            if (std::fabs(existing - mhz) < 1e-6) { present = true; break; }
+        }
+        if (!present) base.push_back(mhz);
+    }
+    return base;
 }
 
 }
@@ -155,10 +185,11 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_quantization_hz = iniInt(ini, "scan.quantization_hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = iniInt(ini, "scan.min_distance_hz", cfg.scan_min_distance_hz);
     cfg.scan_min_peak_width_hz = iniInt(ini, "scan.min_peak_width_hz", cfg.scan_min_peak_width_hz);
-    cfg.scan_only_mhz = iniFrequencyListMhz(ini, "scan.only_scan_mhz");
-    cfg.scan_always_mhz = iniFrequencyListMhz(ini, "scan.always_scan_mhz");
-    cfg.scan_never_mhz = iniFrequencyListMhz(ini, "scan.never_scan_mhz");
-    cfg.scan_never_scan_width_khz = iniDouble(ini, "scan.never_scan_width_khz", cfg.scan_never_scan_width_khz);
+    cfg.scan_whitelist_mhz = iniFrequencyListMhz(ini, "scan.whitelist_mhz");
+    cfg.scan_whitelist_file = iniGet(ini, "scan.whitelist_file", cfg.scan_whitelist_file);
+    cfg.scan_blacklist_mhz = iniFrequencyListMhz(ini, "scan.blacklist_mhz");
+    cfg.scan_blacklist_file = iniGet(ini, "scan.blacklist_file", cfg.scan_blacklist_file);
+    cfg.scan_blacklist_width_khz = iniDouble(ini, "scan.blacklist_width_khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = iniDouble(ini, "scan.active_skip_width_khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = iniInt(ini, "scan.max_peaks", cfg.scan_max_peaks);
     cfg.scan_parallel_detections = iniInt(ini, "scan.parallel_detections", cfg.scan_parallel_detections);
@@ -178,7 +209,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.dry_run = iniBool(ini, "runtime.dry_run", cfg.dry_run);
     cfg.verbose = iniBool(ini, "runtime.verbose", cfg.verbose);
     cfg.decoder_debug = iniBool(ini, "runtime.decoder_debug", cfg.decoder_debug);
-    // CLI overrides config.ini. config.ini itself is fixed next to the binary and cannot be changed by parameter.
     cfg.callsign = args.get("callsign", cfg.callsign);
     cfg.station_lat = args.getDouble("station-lat", cfg.station_lat);
     cfg.station_lon = args.getDouble("station-lon", cfg.station_lon);
@@ -212,10 +242,11 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_quantization_hz = args.getInt("scan-quantization-hz", cfg.scan_quantization_hz);
     cfg.scan_min_distance_hz = args.getInt("scan-min-distance-hz", cfg.scan_min_distance_hz);
     cfg.scan_min_peak_width_hz = args.getInt("scan-min-peak-width-hz", cfg.scan_min_peak_width_hz);
-    if (args.has("scan-only-mhz")) cfg.scan_only_mhz = parseFrequencyListMhz(args.get("scan-only-mhz", ""));
-    if (args.has("scan-always-mhz")) cfg.scan_always_mhz = parseFrequencyListMhz(args.get("scan-always-mhz", ""));
-    if (args.has("scan-never-mhz")) cfg.scan_never_mhz = parseFrequencyListMhz(args.get("scan-never-mhz", ""));
-    cfg.scan_never_scan_width_khz = args.getDouble("scan-never-scan-width-khz", cfg.scan_never_scan_width_khz);
+    if (args.has("scan-whitelist-mhz")) cfg.scan_whitelist_mhz = parseFrequencyListMhz(args.get("scan-whitelist-mhz", ""));
+    cfg.scan_whitelist_file = args.get("scan-whitelist-file", cfg.scan_whitelist_file);
+    if (args.has("scan-blacklist-mhz")) cfg.scan_blacklist_mhz = parseFrequencyListMhz(args.get("scan-blacklist-mhz", ""));
+    cfg.scan_blacklist_file = args.get("scan-blacklist-file", cfg.scan_blacklist_file);
+    cfg.scan_blacklist_width_khz = args.getDouble("scan-blacklist-width-khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = args.getDouble("scan-active-skip-width-khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = args.getInt("scan-max-peaks", cfg.scan_max_peaks);
     cfg.scan_parallel_detections = args.getInt("scan-parallel-detections", cfg.scan_parallel_detections);
@@ -230,6 +261,13 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.channel_timeout_sec = args.getInt("channel-timeout", cfg.channel_timeout_sec);
     cfg.receiver_position_interval_sec = args.getInt("position-interval", cfg.receiver_position_interval_sec);
     if (cfg.dry_run) cfg.upload_enabled = false;
+
+    if (!cfg.scan_whitelist_file.empty()) {
+        cfg.scan_whitelist_mhz = mergeUniqueFrequenciesMhz(cfg.scan_whitelist_mhz, loadFrequencyListFile(cfg.scan_whitelist_file));
+    }
+    if (!cfg.scan_blacklist_file.empty()) {
+        cfg.scan_blacklist_mhz = mergeUniqueFrequenciesMhz(cfg.scan_blacklist_mhz, loadFrequencyListFile(cfg.scan_blacklist_file));
+    }
 
     if (cfg.callsign.empty()) {
         throw std::runtime_error("Missing callsign. Set station.callsign in config.ini or use -callsign.");
@@ -253,8 +291,8 @@ Config Config::load(const Args& args, const std::string& config_file) {
         if (cfg.scan_quantization_hz < 1000) cfg.scan_quantization_hz = 1000;
         if (cfg.scan_min_distance_hz < 100) cfg.scan_min_distance_hz = 100;
         if (cfg.scan_min_peak_width_hz < 0) cfg.scan_min_peak_width_hz = 0;
-        if (cfg.scan_never_scan_width_khz < 0.0) cfg.scan_never_scan_width_khz = 0.0;
-        if (cfg.scan_never_scan_width_khz > 100.0) cfg.scan_never_scan_width_khz = 100.0;
+        if (cfg.scan_blacklist_width_khz < 0.0) cfg.scan_blacklist_width_khz = 0.0;
+        if (cfg.scan_blacklist_width_khz > 100.0) cfg.scan_blacklist_width_khz = 100.0;
         if (cfg.scan_active_skip_width_khz < 0.0) cfg.scan_active_skip_width_khz = 0.0;
         if (cfg.scan_active_skip_width_khz > 100.0) cfg.scan_active_skip_width_khz = 100.0;
         if (cfg.scan_max_peaks < 1) cfg.scan_max_peaks = 1;
@@ -281,3 +319,4 @@ Config Config::load(const Args& args, const std::string& config_file) {
 
     return cfg;
 }
+

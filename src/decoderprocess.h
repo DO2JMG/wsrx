@@ -26,3 +26,4 @@ private:
     int stdout_fd_ = -1;
     std::string buffer_;
 };
+

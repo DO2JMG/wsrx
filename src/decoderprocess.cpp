@@ -75,7 +75,6 @@ void DecoderProcess::stop() {
             }
         }
 
-        // Reap any remaining state without blocking.
         waitpid(pid_, nullptr, WNOHANG);
         pid_ = -1;
     }
@@ -138,3 +137,4 @@ std::optional<std::string> DecoderProcess::readLine() {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     return line;
 }
+

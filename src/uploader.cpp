@@ -108,13 +108,13 @@ bool Uploader::sendTelemetry(const TelemetryFrame& frame) {
     }
 
     std::ostringstream msg;
-    
+
     msg << "Uploading: " << frame.type << " " << frame.serial
                     << " freq=" << frame.frequency_mhz
                     << " lat=" << frame.lat
                     << " lon=" << frame.lon
                     << " alt=" << frame.alt_m;
-    
+
                     log_.info(msg.str());
 
     return postWithCurl(TELEMETRY_URL, data);
@@ -163,9 +163,6 @@ bool Uploader::allowedByRateLimit(const std::string& serial) {
 bool Uploader::hasGpsFix(const TelemetryFrame& frame) const {
     if (std::isnan(frame.lat) || std::isnan(frame.lon)) return false;
 
-    // Manche Decoder (z.B. meisei100mod) liefern schon Frames bevor ein
-    // GPS-Fix vorliegt, dann mit lat = lon = 0.0 statt fehlenden Feldern.
-    // Solche Frames sind kein gueltiger Standort und duerfen nicht hochgeladen werden.
     constexpr double kEpsilon = 1e-6;
     if (std::fabs(frame.lat) < kEpsilon && std::fabs(frame.lon) < kEpsilon) return false;
 
@@ -268,3 +265,4 @@ bool Uploader::postWithCurl(const std::string& url, const std::string& data) {
     }
     return true;
 }
+

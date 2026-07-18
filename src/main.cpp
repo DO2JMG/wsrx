@@ -234,13 +234,11 @@ static std::string makeTempKa9qScript(const Config& cfg, const std::string& deco
 static std::string buildKa9qDecoderPipeline(const Config& cfg, const std::string& decoder_cmd, const std::string& decoder_label, const std::string& decoder_args, Logger& log) {
     (void)log;
     std::string script = makeTempKa9qScript(cfg, decoder_cmd, decoder_label, decoder_args);
-    //log.info("KA9Q pipeline script: " + script);
     std::ostringstream info;
     info << decoder_label << " KA9Q mode: pcmrecord raw IQ -> " << decoder_label
          << " JSON args=[" << decoder_args << "]"
          << " sample_rate=" << cfg.sample_rate
          << " channel=[" << cfg.ka9q_low_hz << "," << cfg.ka9q_high_hz << "]";
-    //log.info(info.str());
     return "/bin/sh " + shellQuote(script);
 }
 
@@ -418,7 +416,6 @@ public:
             std::ostringstream msg;
             msg << "loaded " << count << " learned frequency offset(s) from " << path_
                 << " (" << skipped_stale << " stale entries dropped)";
-            //log.info(msg.str());
         }
     }
 
@@ -468,7 +465,7 @@ public:
     }
 
 private:
-    static constexpr long long MAX_AGE_SEC = 7 * 24 * 3600; // 7 days
+    static constexpr long long MAX_AGE_SEC = 7 * 24 * 3600;
     static constexpr int SAVE_MIN_INTERVAL_SEC = 30;
 
     static long long keyFor(double mhz, int quantization_hz) {
@@ -495,7 +492,7 @@ private:
     std::string path_;
     std::map<long long, LearnedOffset> cache_;
     mutable std::mutex mutex_;
-    std::chrono::steady_clock::time_point last_save_{}; // epoch => "never saved yet"
+    std::chrono::steady_clock::time_point last_save_{};
 };
 
 static std::optional<ScanDetection> parseDftDetectOutput(const std::string& output, double frequency_mhz) {
@@ -692,17 +689,17 @@ static void writeScanSpectrumJson(const std::string& base_dir,
 
 
 
-static bool isNeverScanFrequencyHz(const Config& cfg, double frequency_hz) {
+static bool isBlacklistedFrequencyHz(const Config& cfg, double frequency_hz) {
     const double width_hz = std::max(0.0, cfg.scan_active_skip_width_khz) * 1000.0;
-    for (double mhz : cfg.scan_never_mhz) {
+    for (double mhz : cfg.scan_blacklist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (std::fabs(frequency_hz - mhz * 1000000.0) <= width_hz) return true;
     }
     return false;
 }
 
-static bool isNeverScanFrequencyMhz(const Config& cfg, double frequency_mhz) {
-    return isNeverScanFrequencyHz(cfg, frequency_mhz * 1000000.0);
+static bool isBlacklistedFrequencyMhz(const Config& cfg, double frequency_mhz) {
+    return isBlacklistedFrequencyHz(cfg, frequency_mhz * 1000000.0);
 }
 static void writeLiveSpectrumJson(const std::string& base_dir,
                                   const std::vector<SpectrumBin>& spectrum,
@@ -801,19 +798,6 @@ static void writeScanPeaksJson(const std::string& base_dir,
 }
 
 static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
-    if (!cfg.scan_only_mhz.empty()) {
-        std::vector<double> direct_hz;
-        for (double mhz : cfg.scan_only_mhz) {
-            if (!std::isfinite(mhz) || mhz <= 0.0) continue;
-            if (isNeverScanFrequencyMhz(cfg, mhz)) continue;
-            direct_hz.push_back(mhz * 1e6);
-        }
-        if (cfg.verbose || cfg.decoder_debug) {
-            log.debug("scan only_scan mode: testing " + std::to_string(direct_hz.size()) + " configured frequencies");
-        }
-        return direct_hz;
-    }
-
     const std::string powers = "powers";
     long long start_hz = freqHz(cfg.scan_min_mhz);
     long long stop_hz = freqHz(cfg.scan_max_mhz);
@@ -834,7 +818,6 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
         << "-s " << ssrc << " "
         << "-c 2 > " << shellQuote(log_path) << " 2>/tmp/wsrx_power_" << ::getpid() << ".err";
 
-    //log.info("scan spectrum using KA9Q powers");
     if (cfg.verbose || cfg.decoder_debug) log.debug("scan power command: " + cmd.str());
 
     std::vector<SpectrumBin> spectrum;
@@ -888,7 +871,7 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
 
     std::vector<size_t> peak_idx;
     for (size_t i = 1; i + 1 < spectrum.size(); ++i) {
-        if (isNeverScanFrequencyHz(cfg, spectrum[i].frequency_hz)) continue;
+        if (isBlacklistedFrequencyHz(cfg, spectrum[i].frequency_hz)) continue;
         if (spectrum[i].power_db < trigger) continue;
         if (spectrum[i].power_db < spectrum[i - 1].power_db) continue;
         if (spectrum[i].power_db < spectrum[i + 1].power_db) continue;
@@ -920,7 +903,7 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
             return spectrum[a].power_db > spectrum[b].power_db;
         });
         for (size_t idx : all_idx) {
-            if (isNeverScanFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
+            if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
             const double snr = spectrum[idx].power_db - nf;
             if (snr < cfg.scan_fallback_min_snr_db) break;
             if (!peakWidthOk(idx)) continue;
@@ -940,7 +923,7 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
     std::vector<double> peaks_hz;
     std::vector<double> quantized_hz;
     for (size_t idx : peak_idx) {
-        if (isNeverScanFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
+        if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
         double q = static_cast<double>(cfg.scan_quantization_hz);
         double raw_f = spectrum[idx].frequency_hz;
         double q_f = std::round(raw_f / q) * q;
@@ -966,7 +949,7 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
     std::vector<double> ordered_quantized_hz;
     auto appendUnique = [&](double hz) {
         if (!std::isfinite(hz) || hz <= 0.0) return;
-        if (isNeverScanFrequencyHz(cfg, hz)) return;
+        if (isBlacklistedFrequencyHz(cfg, hz)) return;
         const double q = static_cast<double>(cfg.scan_quantization_hz);
         const double qhz = std::round(hz / q) * q;
         for (double old_qhz : ordered_quantized_hz) {
@@ -975,23 +958,17 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
         ordered_quantized_hz.push_back(qhz);
         ordered_hz.push_back(hz);
     };
-    for (double mhz : cfg.scan_always_mhz) appendUnique(mhz * 1e6);
+    for (double mhz : cfg.scan_whitelist_mhz) appendUnique(mhz * 1e6);
     for (double hz : peaks_hz) appendUnique(hz);
 
     if (ordered_hz.empty()) log.info("scan spectrum: no usable candidates");
     return ordered_hz;
 }
 
-// Wraps runKa9qPowerScanInner() and makes sure always_scan_mhz frequencies are
-// tried regardless of the inner scan's outcome. runKa9qPowerScanInner() has
-// several early-return paths (only_scan_mhz mode, failed/empty spectrum, no
-// peaks above threshold without fallback) that never reach its own
-// always_scan_mhz handling. Without this wrapper, "always" frequencies would
-// silently not be scanned whenever the spectrum scan itself didn't succeed.
 static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
     std::vector<double> result = runKa9qPowerScanInner(cfg, log, allow_fallback_candidates);
 
-    if (cfg.scan_always_mhz.empty()) return result;
+    if (cfg.scan_whitelist_mhz.empty()) return result;
 
     const double q = static_cast<double>(cfg.scan_quantization_hz);
     auto alreadyPresent = [&](double hz) {
@@ -1001,13 +978,13 @@ static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool
         return false;
     };
 
-    for (double mhz : cfg.scan_always_mhz) {
+    for (double mhz : cfg.scan_whitelist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         const double hz = mhz * 1e6;
-        if (isNeverScanFrequencyMhz(cfg, mhz)) continue;
+        if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
         if (alreadyPresent(hz)) continue;
         if (cfg.verbose || cfg.decoder_debug) {
-            log.debug("scan always_scan_mhz: forcing candidate " + std::to_string(mhz) + " MHz");
+            log.debug("scan whitelist_mhz: forcing candidate " + std::to_string(mhz) + " MHz");
         }
         result.push_back(hz);
     }
@@ -1269,7 +1246,6 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
                     << " lat=" << frame->lat
                     << " lon=" << frame->lon
                     << " alt=" << frame->alt_m;
-                //log.info(msg.str());
 
                 if (base_cfg.scan_enabled && std::isfinite(frame->tx_frequency_mhz) && frame->tx_frequency_mhz > 0.0) {
                     offset_cache.update(frame->tx_frequency_mhz, ch->cfg.frequency_mhz, base_cfg.scan_quantization_hz, log);
@@ -1319,12 +1295,11 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
     std::vector<double> peak_hz = runKa9qPowerScan(cfg, log, allow_fallback_candidates);
     if (peak_hz.empty()) return;
 
-    // Cheap, non-subprocess pre-filtering first.
     std::vector<double> candidates;
     candidates.reserve(peak_hz.size());
     for (double peak : peak_hz) {
         const double f_mhz = peak / 1e6;
-        if (isNeverScanFrequencyMhz(cfg, f_mhz)) {
+        if (isBlacklistedFrequencyMhz(cfg, f_mhz)) {
             std::ostringstream msg;
             msg << "scan skip never-scan peak " << f_mhz << " MHz";
             log.debug(msg.str());
@@ -1468,7 +1443,6 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
 }
 
 static void spectrumWorkerThread(const Config& cfg, Logger& log) {
-    //log.info("live spectrum thread started");
     auto last = std::chrono::steady_clock::now() - std::chrono::seconds(cfg.live_spectrum_interval_sec + 1);
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
@@ -1485,7 +1459,6 @@ static void spectrumWorkerThread(const Config& cfg, Logger& log) {
 static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
                              std::mutex& channels_mutex, Uploader& uploader, OffsetCache& offset_cache) {
     auto last_scan = std::chrono::steady_clock::now() - std::chrono::seconds(cfg.scan_interval_sec + 1);
-    //log.info("scan thread started");
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
         auto since_scan = std::chrono::duration_cast<std::chrono::seconds>(now - last_scan).count();
@@ -1614,3 +1587,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+

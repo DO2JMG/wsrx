@@ -44,9 +44,8 @@ std::string padDec(unsigned long n, int width) {
     return v;
 }
 
-//---------------- Replace Serial like dxlAPRS ---------------------------------------
 
-std::string normalizeDFM(std::string type) {    
+std::string normalizeDFM(std::string type) {
     const auto colon = type.find(':');
     if (colon != std::string::npos && colon + 1 < type.size()) {
         type = type.substr(colon + 1);
@@ -54,7 +53,7 @@ std::string normalizeDFM(std::string type) {
     return type;
 }
 
-std::string normalizeDFMSerial(std::string serial, const std::string& type) { 
+std::string normalizeDFMSerial(std::string serial, const std::string& type) {
     const std::string upper_type = upperCopy(type);
     const std::string upper_serial = upperCopy(serial);
 
@@ -95,14 +94,13 @@ std::string normalizeM20Serial(const std::string& working_serial) {
     const int middle = std::stoi(m[2]);
     const unsigned long number = std::stoul(m[3]);
 
-    // first_group = (tmp/12)*100 + (tmp%12 + 1)  =>  Umkehrung:
-    const int hundreds = first_group / 100;      // = tmp/12
-    const int remainder = first_group % 100;     // = tmp%12 + 1
+    const int hundreds = first_group / 100;
+    const int remainder = first_group % 100;
     if (remainder < 1 || remainder > 12) return working_serial;
     if (middle < 1 || middle > 8) return working_serial;
 
-    const int tmp = hundreds * 12 + (remainder - 1);   // = data[18] & 0x7F
-    const int bit7 = (middle - 1) & 1;                 // = data[18] >> 7
+    const int tmp = hundreds * 12 + (remainder - 1);
+    const int bit7 = (middle - 1) & 1;
     const unsigned int byte18 = static_cast<unsigned int>(tmp)
                                | (static_cast<unsigned int>(bit7) << 7);
 
@@ -115,10 +113,10 @@ std::string normalizeM10Serial(const std::string& working_serial) {
     if (!std::regex_match(working_serial, m, m10_re)) return working_serial;
 
     const int h   = hexDigitValue(m[1].str()[0]);
-    const int dd  = std::stoi(m[2]);                    // 0..15
-    const int mid = hexDigitValue(m[3].str()[0]);        // 0..15
-    const int q   = std::stoi(m[4]);                    // 0..7
-    const unsigned long r = std::stoul(m[5]);            // 0..8191 (4-stellig)
+    const int dd  = std::stoi(m[2]);
+    const int mid = hexDigitValue(m[3].str()[0]);
+    const int q   = std::stoi(m[4]);
+    const unsigned long r = std::stoul(m[5]);
 
     if (h < 0 || mid < 0 || dd < 0 || dd > 15) return working_serial;
 
@@ -174,7 +172,7 @@ std::string normalizeMeisei(const std::string& serial) {
         return serial;
     }
 
-    std::string hex_suffix = padHex(meisei_id, 1); // kein Padding, wie Python hex()
+    std::string hex_suffix = padHex(meisei_id, 1);
     if (hex_suffix.size() > 6) {
         hex_suffix = hex_suffix.substr(hex_suffix.size() - 6);
     }
@@ -196,7 +194,7 @@ std::string normalizeSRSC50(const std::string& serial) {
 
     const std::string& segment = parts[1];
     for (unsigned char c : segment) {
-        if (!std::isdigit(c)) return serial; 
+        if (!std::isdigit(c)) return serial;
     }
 
     unsigned long id_val = 0;
@@ -206,7 +204,7 @@ std::string normalizeSRSC50(const std::string& serial) {
         return serial;
     }
 
-    std::string hex_suffix = padHex(id_val, 4); 
+    std::string hex_suffix = padHex(id_val, 4);
     if (hex_suffix.size() > 4) {
         hex_suffix = hex_suffix.substr(hex_suffix.size() - 4);
     }
@@ -229,15 +227,12 @@ std::string normalizeImet(const std::string& serial, int frame, const std::strin
     return serial;
 }
 
-//---------------------------------------------------------------------------------------------------------------
 
 std::string hhmmssFromIsoUtc(const std::string& iso) {
-    // Full ISO-8601 timestamp, e.g. 2026-07-11T21:49:14.000Z
     if (iso.size() >= 19 && iso[10] == 'T' && iso[13] == ':' && iso[16] == ':') {
         return iso.substr(11, 2) + iso.substr(14, 2) + iso.substr(17, 2);
     }
 
-    // imet4iq uses a time-only UTC value, e.g. 21:49:14Z.
     if (iso.size() >= 8 && iso[2] == ':' && iso[5] == ':') {
         const std::string hhmmss = iso.substr(0, 2) + iso.substr(3, 2) + iso.substr(6, 2);
         if (secondsOfDayFromHhmmss(hhmmss) >= 0) return hhmmss;
@@ -265,7 +260,6 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     f.raw_line = line;
     f.timestamp = std::time(nullptr);
 
-    // First handle JSON/single-line output variants.
     auto id = extractString(line, "id");
     auto ser = extractString(line, "serial");
     if (!ser) ser = extractString(line, "ser");
@@ -314,7 +308,6 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (auto v = extractNumber(line, "freq")) f.tx_frequency_mhz = (*v > 1000.0) ? (*v / 1000.0) : *v;
     if (auto v = extractNumber(line, "tx_frequency")) f.tx_frequency_mhz = (*v > 1000.0) ? (*v / 1000.0) : *v;
 
-    // Parse rs1729 verbose RS41 position line.
     if (std::isnan(f.lat) || std::isnan(f.lon) || std::isnan(f.alt_m)) {
         static const std::regex pos_re(
             R"(lat:\s*(-?[0-9]+(?:\.[0-9]+)?)\s+lon:\s*(-?[0-9]+(?:\.[0-9]+)?)\s+alt:\s*(-?[0-9]+(?:\.[0-9]+)?)(?:\s+vH:\s*(-?[0-9]+(?:\.[0-9]+)?))?(?:\s+D:\s*(-?[0-9]+(?:\.[0-9]+)?))?(?:\s+vV:\s*(-?[0-9]+(?:\.[0-9]+)?))?)"
@@ -411,3 +404,4 @@ std::optional<std::string> TelemetryParser::extractString(const std::string& tex
 
     return std::nullopt;
 }
+

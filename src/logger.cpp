@@ -28,3 +28,4 @@ void Logger::write(const std::string& level, const std::string& msg) {
         file_ << line << std::endl;
     }
 }
+

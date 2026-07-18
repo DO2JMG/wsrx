@@ -16,3 +16,4 @@ private:
     std::string current_type_ = "RS41";
     int current_frame_ = -1;
 };
+

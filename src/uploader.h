@@ -29,3 +29,4 @@ private:
     std::chrono::steady_clock::time_point last_position_upload_;
     std::mutex mutex_;
 };
+

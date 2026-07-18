@@ -65,10 +65,11 @@ void Args::printHelp(const char* program) {
               << "  -scan-step-khz <kHz>\n"
               << "  -scan-detect-dwell <sec> seconds for dft_detect per frequency\n"
               << "  -scan-min-peak-width-hz <Hz> require peaks to be at least this wide, default 5000\n"
-              << "  -scan-only-mhz <list>         only test these comma-separated MHz frequencies\n"
-              << "  -scan-always-mhz <list>       test these MHz frequencies before detected peaks\n"
-              << "  -scan-never-mhz <list>        ignore these comma-separated MHz frequencies\n"
-              << "  -scan-never-scan-width-khz <kHz> +/- width around -scan-never-mhz entries, default 5\n"
+              << "  -scan-whitelist-mhz <list>       test these MHz frequencies before detected peaks\n"
+              << "  -scan-whitelist-file <path>  whitelist file, one MHz per line, '#' comments; additive to -scan-whitelist-mhz\n"
+              << "  -scan-blacklist-mhz <list>        ignore these comma-separated MHz frequencies\n"
+              << "  -scan-blacklist-file <path>  blacklist file, one MHz per line, '#' comments; additive to -scan-blacklist-mhz\n"
+              << "  -scan-blacklist-width-khz <kHz> +/- width around -scan-blacklist-mhz entries, default 5\n"
               << "  -scan-offset-search-hz <Hz>  try +/- this range around each peak\n"
               << "  -scan-offset-step-hz <Hz>    offset search step\n"
               << "  -scan-accept-score <0..1>    early accept score for dft_detect\n"
@@ -93,3 +94,4 @@ void Args::printHelp(const char* program) {
               << "  -verbose                 show cleaned runtime debug output\n"
               << "  -decoder-debug           show every raw decoder/scan line\n";
 }
+

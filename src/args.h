@@ -18,3 +18,4 @@ public:
 private:
     std::map<std::string, std::string> values_;
 };
+

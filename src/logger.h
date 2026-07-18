@@ -19,3 +19,4 @@ private:
     std::ofstream file_;
     std::mutex mutex_;
 };
+

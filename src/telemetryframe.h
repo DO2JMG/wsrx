@@ -34,3 +34,4 @@ struct TelemetryFrame {
     std::string raw_datetime;
     std::string raw_line;
 };
+
