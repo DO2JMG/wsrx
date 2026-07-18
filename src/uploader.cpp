@@ -201,6 +201,11 @@ bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
         return std::regex_match(serial, c50_serial_re);
     }
 
+    if (type == "S1") {
+        static const std::regex s1_serial_re(R"(^S1-s?[0-9]+$)");
+        return std::regex_match(serial, s1_serial_re);
+    }
+
     return true;
 }
 
@@ -265,4 +270,3 @@ bool Uploader::postWithCurl(const std::string& url, const std::string& data) {
     }
     return true;
 }
-
