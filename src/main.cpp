@@ -185,6 +185,7 @@ static std::string expandDecoderArgs(std::string args, const Config& cfg) {
     };
     replaceAll(args, "{iq_offset}", std::to_string(cfg.iq_offset_hz));
     replaceAll(args, "{sample_rate}", std::to_string(cfg.sample_rate));
+    replaceAll(args, "{frequency_hz}", std::to_string(static_cast<long long>(cfg.frequency_mhz * 1e6 + 0.5)));
     return args;
 }
 
@@ -286,6 +287,7 @@ static std::string normalizeDecoderName(const std::string& decoder) {
     if (d.find("imet") != std::string::npos) return "imet";
     if (d.find("meisei") != std::string::npos) return "meisei";
     if (d.find("c34c50") != std::string::npos) return "c34c50";
+    if (d.find("s1") != std::string::npos) return "s1";
     return d;
 }
 
@@ -298,6 +300,7 @@ static std::string decoderLabel(const std::string& decoder) {
     if (d == "imet") return "IMET";
     if (d == "meisei") return "IMS100";
     if (d == "c34c50") return "c34c50";
+    if (d == "s1") return "S1";
     return decoder;
 }
 
@@ -309,6 +312,7 @@ static void validateRequiredDecoderFiles(const Config& cfg) {
         "imet4iq",
         "meisei100mod",
         "c50iq",
+        "windsondmod",
         "dft_detect"
     };
 
@@ -329,6 +333,7 @@ static std::string decoderCommandPath(const Config& cfg, const std::string& deco
     if (d == "imet") return joinPath(cfg.decoder_dir, "imet4iq");
     if (d == "meisei") return joinPath(cfg.decoder_dir, "meisei100mod");
     if (d == "c34c50") return joinPath(cfg.decoder_dir, "c50iq");
+    if (d == "s1") return joinPath(cfg.decoder_dir, "windsondmod");
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -341,6 +346,7 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     if (d == "imet") return expandDecoderArgs("--json --iq {iq_offset} - {sample_rate} 16", cfg);
     if (d == "meisei") return expandDecoderArgs("--json --dc --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "c34c50") return expandDecoderArgs("--json --ptu --xor-auto --lpIQ --dc --iq {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "s1") return expandDecoderArgs("--iq --samplerate {sample_rate} --json --frequency {frequency_hz}", cfg);
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -507,7 +513,7 @@ static std::optional<ScanDetection> parseDftDetectOutput(const std::string& outp
     ScanDetection det;
     det.frequency_mhz = frequency_mhz;
 
-    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01"};
+    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01", "S1"};
     for (const auto& k : known) {
         if (first_line.find(k) != std::string::npos) {
             det.sonde_type = k;
@@ -1359,7 +1365,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                 ++detections;
                 const std::string decoder_name = normalizeDecoderName(det->sonde_type);
                 if (decoder_name != "rs41" && decoder_name != "dfm" && decoder_name != "m10" &&
-                    decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei") {
+                    decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei" &&
+                    decoder_name != "s1") {
                     std::ostringstream unsupported;
                     unsupported << "scan detected unsupported sonde " << det->sonde_type
                                 << " near " << f_mhz << " MHz";
@@ -1373,6 +1380,14 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         chcfg.scan_enabled = false;
                         chcfg.frequency_mhz = start_freq;
                         chcfg.decoder = decoder_name;
+
+                        if (decoder_name == "s1") {
+                            // Windsond S1 needs a much wider KA9Q channel than the
+                            // narrowband sondes (large FM deviation) - 60 kHz total,
+                            // vs. the global default (usually 40 kHz for the others).
+                            chcfg.ka9q_low_hz = -30000;
+                            chcfg.ka9q_high_hz = 30000;
+                        }
 
                         std::ostringstream hit;
                         hit << "scan detected " << det->sonde_type << " at " << f_mhz << " MHz";
@@ -1587,4 +1602,3 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
-
