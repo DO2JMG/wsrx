@@ -4,11 +4,6 @@ With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radioso
 
 The software is still under development, and there may still be some bugs.
 
-### Hardware required:
-
-- Raspberry PI 4
-- Airspy mini or SDR-Play
-
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
 
 <p>&nbsp;</p>
@@ -28,6 +23,12 @@ The software is still under development, and there may still be some bugs.
 The C50 has not been tested.
 
 <p>&nbsp;</p>
+
+### Hardware required:
+
+- Raspberry PI 4
+- Airspy mini or SDR-Play
+
 
 This guide installs KA9Q Radio, the wsrx radiosonde receiver software and the required decoder programs. wsrx uses KA9Q as SDR backend and expects all decoder binaries in the decoder subdirectory next to the wsrx application.
 
