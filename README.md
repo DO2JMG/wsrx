@@ -29,6 +29,7 @@ The C50 has not been tested.
 - Raspberry PI 4
 - Airspy mini or SDR-Play
 
+<p>&nbsp;</p>
 
 This guide installs KA9Q Radio, the wsrx radiosonde receiver software and the required decoder programs. wsrx uses KA9Q as SDR backend and expects all decoder binaries in the decoder subdirectory next to the wsrx application.
 
