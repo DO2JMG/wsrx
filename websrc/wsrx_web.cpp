@@ -75,6 +75,35 @@ static std::string read_file(const std::string &path, size_t max_bytes = 512 * 1
     return ss.str();
 }
 
+static std::string ini_value(const std::string &ini_text, const std::string &key) {
+    std::istringstream in(ini_text);
+    std::string line;
+    while (std::getline(in, line)) {
+        size_t comment = line.find_first_of("#;");
+        if (comment != std::string::npos) line = line.substr(0, comment);
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = line.substr(0, eq);
+        size_t a = k.find_first_not_of(" \t");
+        size_t b = k.find_last_not_of(" \t");
+        if (a == std::string::npos) continue;
+        k = k.substr(a, b - a + 1);
+        if (k != key) continue;
+        std::string v = line.substr(eq + 1);
+        a = v.find_first_not_of(" \t");
+        b = v.find_last_not_of(" \t");
+        if (a == std::string::npos) return "";
+        return v.substr(a, b - a + 1);
+    }
+    return "";
+}
+
+static std::string resolve_config_path(const std::string &base_dir, const std::string &value, const std::string &fallback_filename) {
+    std::string v = value.empty() ? fallback_filename : value;
+    if (!v.empty() && v[0] == '/') return v;
+    return base_dir + "/" + v;
+}
+
 static std::string read_file_full(const std::string &path, size_t max_bytes = 1024 * 1024) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return "";
@@ -191,6 +220,8 @@ struct App {
     std::string script;
     std::string log_file;
     std::string config_file;
+    std::string whitelist_file;
+    std::string blacklist_file;
     std::string offset_file;
     std::string spectrum_file;
     std::string peaks_file;
@@ -429,6 +460,14 @@ static void handle_client(int fd, const App &app) {
         send_response(fd, 200, "text/plain", tail_lines(read_file(app.log_file, 1024 * 1024), lines));
     } else if (path == "/api/config") {
         send_response(fd, 200, "text/plain", read_file(app.config_file, 256 * 1024));
+    } else if (path == "/api/whitelist") {
+        std::string t = read_file(app.whitelist_file, 256 * 1024);
+        if (t.empty() && !file_exists(app.whitelist_file)) t = app.whitelist_file + " not found\n";
+        send_response(fd, 200, "text/plain", t);
+    } else if (path == "/api/blacklist") {
+        std::string t = read_file(app.blacklist_file, 256 * 1024);
+        if (t.empty() && !file_exists(app.blacklist_file)) t = app.blacklist_file + " not found\n";
+        send_response(fd, 200, "text/plain", t);
     } else if (path == "/api/offsets") {
         std::string t = read_file(app.offset_file, 256 * 1024);
         if (t.empty() && !file_exists(app.offset_file)) t = "offset_cache.txt not found yet\n";
@@ -460,9 +499,7 @@ static void handle_client(int fd, const App &app) {
         else {
             std::string action = path.substr(std::string("/api/").size());
             int rc = 0;
-            // Always target "wsrx" explicitly. Without a target, wsrx.sh
-            // controls BOTH wsrx and wsrx-web -- which would make this very
-            // request kill/restart the web server that is handling it.
+
             std::string out = run_cmd(shell_quote(app.script) + " " + action + " wsrx", &rc);
             send_response(fd, rc == 0 ? 200 : 500, "text/plain", out);
         }
@@ -496,6 +533,11 @@ int main(int argc, char **argv) {
     app.script = app.base_dir + "/wsrx.sh";
     app.log_file = app.base_dir + "/logs/wsrx.log";
     app.config_file = app.base_dir + "/config.ini";
+    {
+        std::string ini_text = read_file(app.config_file, 256 * 1024);
+        app.whitelist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "whitelist_file"), "whitelist.txt");
+        app.blacklist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "blacklist_file"), "blacklist.txt");
+    }
     app.offset_file = app.base_dir + "/offset_cache.txt";
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
     app.peaks_file = app.base_dir + "/data/scan_peaks.json";
@@ -539,3 +581,4 @@ int main(int argc, char **argv) {
     close(s);
     return 0;
 }
+
