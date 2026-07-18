@@ -19,8 +19,10 @@ The software is still under development, and there may still be some bugs.
 | InterMet     | iMet-4             | ✅       | ✅          | ✅       | ✅               |
 | Meisei       | iMS-100    | ✅       | ✅          | ✅       | ❌               |
 | Meteolabor   | SRS-C50      | ✅       | ✅          | ✅       | ❌               |
+| Windsond     | S1            | ✅       | ✅          | ✅       | ✅               |
 
 The C50 has not been tested.
+The Windsond S1 decoder is very experimental
 
 <p>&nbsp;</p>
 
