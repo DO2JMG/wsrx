@@ -4,6 +4,11 @@ With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radioso
 
 The software is still under development, and there may still be some bugs.
 
+### Hardware required:
+
+- Raspberry PI 4
+- Airspy mini or SDR-Play
+
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
 
 <p>&nbsp;</p>
