@@ -226,6 +226,8 @@ struct App {
     std::string spectrum_file;
     std::string peaks_file;
     std::string sondes_dir;
+    std::string web_auth_user;
+    std::string web_auth_pass;
 };
 
 static std::string http_date() {
@@ -259,6 +261,77 @@ static std::string mime_type(const std::string &path) {
     if (path.size() >= 4 && path.substr(path.size() - 4) == ".svg") return "image/svg+xml";
     if (path.size() >= 4 && path.substr(path.size() - 4) == ".png") return "image/png";
     return "text/plain";
+}
+
+static std::string base64_decode(const std::string &in) {
+    static const std::string chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> lut(256, -1);
+    for (int i = 0; i < 64; ++i) lut[static_cast<unsigned char>(chars[i])] = i;
+    std::string out;
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (lut[c] == -1) break;
+        val = (val << 6) + lut[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+static std::string get_header(const std::string &request, const std::string &header_name) {
+    std::istringstream in(request);
+    std::string line;
+    std::getline(in, line); // request line, not a header
+    std::string lower_name = header_name;
+    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                    [](unsigned char c) { return std::tolower(c); });
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) break; // end of headers
+        size_t colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        std::string name = line.substr(0, colon);
+        std::transform(name.begin(), name.end(), name.begin(),
+                        [](unsigned char c) { return std::tolower(c); });
+        if (name == lower_name) {
+            std::string val = line.substr(colon + 1);
+            size_t a = val.find_first_not_of(" \t");
+            return a == std::string::npos ? "" : val.substr(a);
+        }
+    }
+    return "";
+}
+
+static bool check_auth(const App &app, const std::string &request) {
+    if (app.web_auth_user.empty()) return true; // auth disabled: no user configured
+    std::string auth_header = get_header(request, "Authorization");
+    const std::string prefix = "Basic ";
+    if (auth_header.compare(0, prefix.size(), prefix) != 0) return false;
+    std::string decoded = base64_decode(auth_header.substr(prefix.size()));
+    size_t colon = decoded.find(':');
+    if (colon == std::string::npos) return false;
+    std::string user = decoded.substr(0, colon);
+    std::string pass = decoded.substr(colon + 1);
+    return user == app.web_auth_user && pass == app.web_auth_pass;
+}
+
+static void send_unauthorized(int fd) {
+    const std::string body = "401 Unauthorized\n";
+    std::ostringstream h;
+    h << "HTTP/1.1 401 Unauthorized\r\n";
+    h << "Date: " << http_date() << "\r\n";
+    h << "Server: wsrx-web\r\n";
+    h << "WWW-Authenticate: Basic realm=\"wsrx\"\r\n";
+    h << "Content-Type: text/plain; charset=utf-8\r\n";
+    h << "Content-Length: " << body.size() << "\r\n";
+    h << "Cache-Control: no-store\r\n";
+    h << "Connection: close\r\n\r\n";
+    std::string out = h.str() + body;
+    send(fd, out.data(), out.size(), MSG_NOSIGNAL);
 }
 
 static bool send_static_file(int fd, const App &app, const std::string &request_path) {
@@ -421,6 +494,14 @@ static void handle_client(int fd, const App &app) {
     ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
     if (n <= 0) { close(fd); return; }
     buf[n] = '\0';
+    std::string request_str(buf, static_cast<size_t>(n));
+
+    if (!check_auth(app, request_str)) {
+        send_unauthorized(fd);
+        close(fd);
+        return;
+    }
+
     std::istringstream req(buf);
     std::string method, target, version;
     req >> method >> target >> version;
@@ -494,6 +575,13 @@ static void handle_client(int fd, const App &app) {
         send_response(fd, 200, "application/json", t);
     } else if (path == "/api/radiosondes") {
         send_response(fd, 200, "application/json", radiosondes_json(app));
+    } else if (path == "/api/clearlogs") {
+        if (method != "POST") send_response(fd, 405, "text/plain", "POST required\n");
+        else {
+            int rc = 0;
+            std::string out = run_cmd(shell_quote(app.script) + " clearlogs", &rc);
+            send_response(fd, rc == 0 ? 200 : 500, "text/plain", out);
+        }
     } else if (path == "/api/start" || path == "/api/stop" || path == "/api/restart") {
         if (method != "POST") send_response(fd, 405, "text/plain", "POST required\n");
         else {
@@ -537,6 +625,8 @@ int main(int argc, char **argv) {
         std::string ini_text = read_file(app.config_file, 256 * 1024);
         app.whitelist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "whitelist_file"), "whitelist.txt");
         app.blacklist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "blacklist_file"), "blacklist.txt");
+        app.web_auth_user = ini_value(ini_text, "web_auth_user");
+        app.web_auth_pass = ini_value(ini_text, "web_auth_password");
     }
     app.offset_file = app.base_dir + "/offset_cache.txt";
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
@@ -566,6 +656,11 @@ int main(int argc, char **argv) {
     std::cout << "wsrx-web listening on http://" << bind_addr << ":" << port << "\n";
     std::cout << "base_dir=" << app.base_dir << "\n";
     std::cout << "web_dir=" << app.web_dir << "\n";
+    if (!app.web_auth_user.empty()) {
+        std::cout << "web auth: enabled (user=" << app.web_auth_user << ")\n";
+    } else {
+        std::cout << "web auth: disabled (set web_auth_user/web_auth_password in config.ini [web] section to enable)\n";
+    }
 
     while (!g_stop) {
         sockaddr_in caddr{};
