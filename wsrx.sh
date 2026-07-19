@@ -125,6 +125,29 @@ function log_wsrx {
     tail -f "${WSRX_LOGFILE}"
 }
 
+# ---------------------------------------------------------------- logs
+
+function clear_logs {
+    echo "$(timestamp) [INFO] clearing logs"
+
+    # Truncate (not delete) the running logs: wsrx/wsrx-web keep their log
+    # file open in append mode, so truncating in place lets them keep
+    # writing correctly without needing a restart.
+    : > "${WSRX_LOGFILE}" 2>/dev/null || true
+    : > "${WEB_LOGFILE}" 2>/dev/null || true
+
+    # Per-radiosonde JSON logs are opened, written, and closed for each
+    # frame, so these can simply be removed.
+    sondesdir="${logdir}/sondes"
+    removed=0
+    if [ -d "${sondesdir}" ]; then
+        removed="$(find "${sondesdir}" -maxdepth 1 -name '*.json' -type f | wc -l)"
+        find "${sondesdir}" -maxdepth 1 -name '*.json' -type f -delete
+    fi
+
+    echo "$(timestamp) [INFO] logs cleared: ${WSRX_LOGFILE}, ${WEB_LOGFILE}, ${removed} sonde log(s) in ${sondesdir}"
+}
+
 # ---------------------------------------------------------------- wsrx-web
 
 function print_urls_web {
@@ -309,8 +332,9 @@ function log_web {
 # ---------------------------------------------------------------- dispatch
 
 function usage {
-    echo "Usage: $0 {start|stop|restart|status|log} [wsrx|web]"
+    echo "Usage: $0 {start|stop|restart|status|log|clearlogs} [wsrx|web]"
     echo "Without a target, the command applies to both wsrx and wsrx-web."
+    echo "clearlogs truncates wsrx.log/wsrx-web.log and deletes logs/sondes/*.json (ignores target)."
     echo "Environment (wsrx-web only): WSRX_WEB_BIND=0.0.0.0 WSRX_WEB_PORT=8073"
 }
 
@@ -358,6 +382,9 @@ case "x$1" in
         else
             log_web
         fi
+        ;;
+    xclearlogs)
+        clear_logs || rc=1
         ;;
     *)
         usage
