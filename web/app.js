@@ -313,6 +313,7 @@ async function refreshAll() {
 
 async function action(cmd) {
   if (cmd === 'stop' && !confirm('Really stop wsrx?')) return;
+  if (cmd === 'clearlogs' && !confirm('Really delete wsrx.log, wsrx-web.log and all radiosonde logs? This cannot be undone.')) return;
   const r = await fetch('/api/' + cmd, { method: 'POST' });
   const t = await r.text();
   setText('statusText', t);
