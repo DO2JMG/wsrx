@@ -1,6 +1,8 @@
 let activeTab = 'log';
 let lastSpectrum = null;
 let lastPeaks = null;
+let peakHitboxes = [];
+let lastPlotMeta = null;
 let activeChannelFreqs = [];
 
 async function getJson(url) {
@@ -127,6 +129,8 @@ function drawSpectrum(spec, peaksDoc) {
     ctx.font = `${13 * dpr}px system-ui`;
     ctx.fillText(spec && spec.error ? spec.error : 'No live spectrum available yet', 14 * dpr, 28 * dpr);
     info.textContent = 'Live spectrum: no data';
+    lastPlotMeta = null;
+    peakHitboxes = [];
     return;
   }
 
@@ -205,6 +209,7 @@ function drawSpectrum(spec, peaksDoc) {
   ctx.stroke();
 
   const peaks = peaksDoc && Array.isArray(peaksDoc.peaks) ? peaksDoc.peaks : [];
+  peakHitboxes = [];
   for (const pk of peaks) {
     const xx = x(pk[0]);
     const yy = y(pk[1]);
@@ -217,9 +222,12 @@ function drawSpectrum(spec, peaksDoc) {
     ctx.moveTo(xx, yy);
     ctx.lineTo(xx, padT);
     ctx.stroke();
+    peakHitboxes.push({ xCss: xx / dpr, yCss: yy / dpr, freqMhz: pk[0], powerDb: pk[1] });
   }
 
   drawActiveChannelMarkers(ctx, activeChannelFreqs, minF, maxF, padL, padT, plotW, plotH, dpr);
+
+  lastPlotMeta = { points, minF, maxF, minP, maxP, padL, padT, plotW, plotH, dpr };
 
   ctx.fillStyle = '#c9d1d9';
   ctx.font = `${12 * dpr}px system-ui`;
@@ -330,6 +338,75 @@ document.querySelectorAll('[data-action]').forEach(btn => {
 
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
 window.addEventListener('resize', () => { if (lastSpectrum) drawSpectrum(lastSpectrum, lastPeaks); });
+
+function initSpectrumTooltip() {
+  const canvas = document.getElementById('spectrumCanvas');
+  const tooltip = document.getElementById('spectrumTooltip');
+  if (!canvas || !tooltip) return;
+  const PEAK_SNAP_CSS = 8;
+  const IDLE_DELAY_MS = 150;
+  let idleTimer = null;
+  let pendingPos = null;
+
+  function updateTooltip(mx, my) {
+    if (!lastPlotMeta || !lastPlotMeta.points.length) {
+      tooltip.style.display = 'none';
+      return;
+    }
+    const { points, minF, maxF, minP, maxP, padL, padT, plotW, plotH, dpr } = lastPlotMeta;
+    const padLCss = padL / dpr, padTCss = padT / dpr, plotWCss = plotW / dpr, plotHCss = plotH / dpr;
+
+    if (mx < padLCss || mx > padLCss + plotWCss || my < padTCss || my > padTCss + plotHCss) {
+      tooltip.style.display = 'none';
+      canvas.style.cursor = 'default';
+      return;
+    }
+
+    // pixel position -> frequency, then find the nearest measured spectrum bin
+    const freq = minF + (mx - padLCss) / plotWCss * (maxF - minF);
+    let lo = 0, hi = points.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid][0] < freq) lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0 && Math.abs(points[lo - 1][0] - freq) < Math.abs(points[lo][0] - freq)) lo -= 1;
+    const pt = points[lo];
+
+    // if the cursor is close to a detected peak, snap to it and label it as such
+    let hit = null, bestDist = Infinity;
+    for (const p of peakHitboxes) {
+      const d = Math.abs(p.xCss - mx);
+      if (d < bestDist) { bestDist = d; hit = p; }
+    }
+    const isPeak = hit && bestDist <= PEAK_SNAP_CSS;
+
+    const freqMhz = isPeak ? hit.freqMhz : pt[0];
+    const powerDb = isPeak ? hit.powerDb : pt[1];
+    tooltip.textContent = `${freqMhz.toFixed(3)} MHz | ${powerDb.toFixed(1)} dB${isPeak ? ' (Peak)' : ''}`;
+    tooltip.style.left = mx + 'px';
+    tooltip.style.top = (my - 20) + 'px';
+    tooltip.style.display = 'block';
+    canvas.style.cursor = 'crosshair';
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    pendingPos = { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+    tooltip.style.display = 'none';
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (pendingPos) updateTooltip(pendingPos.mx, pendingPos.my);
+    }, IDLE_DELAY_MS);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    pendingPos = null;
+    tooltip.style.display = 'none';
+  });
+}
+
+initSpectrumTooltip();
 setInterval(refreshAll, 500);
 refreshAll();
 

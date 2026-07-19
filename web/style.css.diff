@@ -1,0 +1,32 @@
+--- web/style.css	2026-07-19 13:47:49.100868245 +0000
++++ /home/claude/wsrx-tooltip-patch/style.css	2026-07-19 14:01:33.209828170 +0000
+@@ -120,6 +120,9 @@
+ }
+ .panel-subtitle { margin-bottom: 4px; color: #507ba8; }
+ .caret { color: #507ba8; margin-right: 6px; }
++.spectrum-canvas-wrap {
++  position: relative;
++}
+ #spectrumCanvas {
+   width: 100%;
+   height: 290px;
+@@ -128,6 +131,19 @@
+   background: #fefeff;
+   border: 1px solid #20252b;
+ }
++.spectrum-tooltip {
++  position: absolute;
++  display: none;
++  pointer-events: none;
++  background: #0c1828;
++  border: 1px solid #507ba8;
++  color: #c9d1d9;
++  font: 12px system-ui;
++  padding: 4px 8px;
++  white-space: nowrap;
++  transform: translate(-50%, -100%);
++  z-index: 10;
++}
+ 
+ .stats-list { margin-bottom: 4px; }
+ .stat-line {
