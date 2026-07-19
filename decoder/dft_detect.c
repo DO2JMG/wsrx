@@ -1,4 +1,3 @@
-
 /*
  *  compile:
  *      gcc dft_detect.c -lm -o dft_detect
@@ -149,6 +148,14 @@ static char wxr2pn9_header[] =
     "11000001""10010100"; //"11000001";  // C1 94 C1
 
 
+// Windsond S1 (Sparv Embedded), 2400 baud, NRZ-FSK
+// 20-bit syncword 0x5552D (see windsondmod.c: S1_SYNCWORD), MSB first as transmitted.
+// No fixed preamble is decoded by windsondmod (bit-sync is done via zero-crossing
+// PLL), so only the syncword itself is used here; herrs/thres may need retuning
+// once real-world captures are available.
+static char windsond_header[] = "01010101010100101101"; // 0x5552D
+
+
 typedef struct {
     int sps;  // header: symbol rate, baud
     int hLen;
@@ -192,11 +199,12 @@ static float set_lpIQ = 0.0;
 #define tn_IMET4     26
 #define tn_IMET1rs   28
 #define tn_IMET1ab   29
+#define tn_S1        30
 
-static int idxIMETafsk = 16;
-#define idxRS        17
-#define idxI4        18
-#define Nrs          19
+static int idxIMETafsk = 17;
+#define idxRS        18
+#define idxI4        19
+#define Nrs          20
 static rsheader_t rs_hdr[Nrs] = {
     { 2500, 0, 0, dfm_header,      1.0, 0.0, 0.65, 2, NULL, "DFM9",     tn_DFM,      0, 1, 0.0, 0.0}, // DFM6: -2 ?
     { 4800, 0, 0, rs41_header,     0.5, 0.0, 0.70, 2, NULL, "RS41",     tn_RS41,     0, 1, 0.0, 0.0},
@@ -213,6 +221,7 @@ static rsheader_t rs_hdr[Nrs] = {
     { 5800, 0, 0, c34_preheader,   1.5, 0.0, 0.80, 2, NULL, "C34C50",   tn_C34C50,   0, 2, 0.0, 0.0}, // C34/C50 2900 Hz tone
     { 4800, 0, 0, weathex_header,  1.0, 0.0, 0.65, 2, NULL, "WXR301",   tn_WXR301,   0, 3, 0.0, 0.0},
     { 5000, 0, 0, wxr2pn9_header,  1.0, 0.0, 0.65, 2, NULL, "WXRPN9",   tn_WXRpn9,   0, 3, 0.0, 0.0},
+    { 2400, 0, 0, windsond_header, 1.0, 0.0, 0.80, 2, NULL, "S1",       tn_S1,       0, 1, 0.0, 0.0}, // Windsond S1, syncword only (see comment above); thres verified against real capture (s1_434.wav): scores ~0.98
     { 9600, 0, 0, imet1ab_header,  1.0, 0.0, 0.80, 2, NULL, "IMET1AB",  tn_IMET1ab,  1, 3, 0.0, 0.0}, // (rs_hdr[idxAB])
     //idxIMETafsk:
     { 9600, 0, 0, imet_preamble,   0.5, 0.0, 0.80, 4, NULL, "IMETafsk", tn_IMETa  ,  1, 1, 0.0, 0.0}, // IMET1AB, IMET1RS (IQ)IMET4
