@@ -317,6 +317,62 @@ Config Config::load(const Args& args, const std::string& config_file) {
         throw std::runtime_error("Missing station position. Set station.lat/station.lon in config.ini or use -station-lat/-station-lon.");
     }
 
+    for (int i = 1; i <= 16; ++i) {
+        const std::string prefix = "radio" + std::to_string(i) + ".";
+        if (ini.find(prefix + "radio_name") == ini.end()) continue;
+
+        RadioBackend rb;
+        rb.name = iniGet(ini, prefix + "name", "radio" + std::to_string(i));
+        rb.ka9q_radio = iniGet(ini, prefix + "radio_name", "");
+        rb.ka9q_pcm = iniGet(ini, prefix + "pcm_name", "");
+        rb.scan_min_mhz = iniDouble(ini, prefix + "min_mhz", cfg.scan_min_mhz);
+        rb.scan_max_mhz = iniDouble(ini, prefix + "max_mhz", cfg.scan_max_mhz);
+
+        if (rb.ka9q_radio.empty() || rb.ka9q_pcm.empty()) {
+            throw std::runtime_error("[radio" + std::to_string(i) + "] needs both radio_name and pcm_name in config.ini.");
+        }
+        if (rb.scan_min_mhz <= 0.0 || rb.scan_max_mhz <= rb.scan_min_mhz) {
+            throw std::runtime_error("[radio" + std::to_string(i) + "] has an invalid min_mhz/max_mhz range in config.ini.");
+        }
+        cfg.radios.push_back(rb);
+    }
+
+    if (cfg.radios.empty()) {
+        RadioBackend rb;
+        rb.name = "default";
+        rb.ka9q_radio = cfg.ka9q_radio;
+        rb.ka9q_pcm = cfg.ka9q_pcm;
+        rb.scan_min_mhz = cfg.scan_min_mhz;
+        rb.scan_max_mhz = cfg.scan_max_mhz;
+        cfg.radios.push_back(rb);
+    } else {
+        for (size_t a = 0; a < cfg.radios.size(); ++a) {
+            for (size_t b = a + 1; b < cfg.radios.size(); ++b) {
+                const auto& ra = cfg.radios[a];
+                const auto& rb = cfg.radios[b];
+                const bool overlap = ra.scan_min_mhz < rb.scan_max_mhz && rb.scan_min_mhz < ra.scan_max_mhz;
+                if (overlap) {
+                    throw std::runtime_error(
+                        "[radio" + std::to_string(a + 1) + "] and [radio" + std::to_string(b + 1) +
+                        "] scan ranges overlap in config.ini. Give each SDR its own non-overlapping min_mhz/max_mhz.");
+                }
+            }
+        }
+
+        double combined_min = cfg.radios.front().scan_min_mhz;
+        double combined_max = cfg.radios.front().scan_max_mhz;
+        for (const auto& rb : cfg.radios) {
+            combined_min = std::min(combined_min, rb.scan_min_mhz);
+            combined_max = std::max(combined_max, rb.scan_max_mhz);
+        }
+        cfg.scan_min_mhz = combined_min;
+        cfg.scan_max_mhz = combined_max;
+    }
+
+    std::sort(cfg.radios.begin(), cfg.radios.end(), [](const RadioBackend& a, const RadioBackend& b) {
+        return a.scan_min_mhz < b.scan_min_mhz;
+    });
+
     return cfg;
 }
 

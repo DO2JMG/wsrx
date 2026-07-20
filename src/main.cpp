@@ -803,52 +803,74 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
-static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+// A scan candidate frequency, tagged with the SDR/KA9Q backend that saw it,
+// so the caller knows which ka9q_radio/ka9q_pcm to open the real channel on.
+struct ScanCandidate {
+    double frequency_hz = 0.0;
+    const RadioBackend* radio = nullptr;
+};
+
+// Runs one KA9Q 'powers' spectrum sweep across a single backend's own
+// sub-band (radio.scan_min_mhz .. radio.scan_max_mhz) and returns the raw
+// spectrum plus the chosen peak indices for that backend alone. This is the
+// per-SDR building block; runKa9qPowerScan() below calls it once per
+// configured radio and merges the results.
+struct BackendScanResult {
+    std::vector<SpectrumBin> spectrum;
+    double noise_floor = NAN;
+    double trigger = NAN;
+    std::vector<size_t> peak_idx;
+    bool used_fallback = false;
+};
+
+static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const RadioBackend& radio, Logger& log, bool allow_fallback_candidates) {
+    BackendScanResult out;
     const std::string powers = "powers";
-    long long start_hz = freqHz(cfg.scan_min_mhz);
-    long long stop_hz = freqHz(cfg.scan_max_mhz);
+    long long start_hz = freqHz(radio.scan_min_mhz);
+    long long stop_hz = freqHz(radio.scan_max_mhz);
     double center_hz = (static_cast<double>(start_hz) + static_cast<double>(stop_hz)) / 2.0;
     int bins = static_cast<int>(std::floor((static_cast<double>(stop_hz - start_hz)) / cfg.scan_power_bin_hz)) + 1;
     if (bins < 8) bins = 8;
 
-    const std::string log_path = "/tmp/wsrx_power_" + std::to_string(::getpid()) + ".csv";
+    const std::string log_path = "/tmp/wsrx_power_" + std::to_string(::getpid()) + "_" + radio.name + ".csv";
     std::string ssrc = std::to_string(static_cast<long long>(std::llround(center_hz / 1000.0))) + "03";
 
     std::ostringstream cmd;
     cmd << "timeout " << (cfg.scan_spectrum_dwell_sec + 10) << " "
-        << powers << " " << shellQuote(cfg.ka9q_radio) << " "
+        << powers << " " << shellQuote(radio.ka9q_radio) << " "
         << "-f " << static_cast<long long>(std::llround(center_hz)) << " "
         << "-w " << cfg.scan_power_bin_hz << " "
         << "-b " << bins << " "
         << "-i " << cfg.scan_spectrum_dwell_sec << " "
         << "-s " << ssrc << " "
-        << "-c 2 > " << shellQuote(log_path) << " 2>/tmp/wsrx_power_" << ::getpid() << ".err";
+        << "-c 2 > " << shellQuote(log_path) << " 2>/tmp/wsrx_power_" << ::getpid() << "_" << radio.name << ".err";
 
-    if (cfg.verbose || cfg.decoder_debug) log.debug("scan power command: " + cmd.str());
+    if (cfg.verbose || cfg.decoder_debug) log.debug("scan power command [" + radio.name + "]: " + cmd.str());
 
-    std::vector<SpectrumBin> spectrum;
     {
         std::lock_guard<std::mutex> powers_lock(g_powers_mutex);
         int rc = std::system(cmd.str().c_str());
         if (rc != 0) {
             std::ostringstream msg;
-            msg << "scan powers failed rc=" << rc << " - is the KA9Q 'powers' binary installed/in PATH?";
+            msg << "scan powers failed [" << radio.name << "] rc=" << rc << " - is the KA9Q 'powers' binary installed/in PATH, and is " << radio.ka9q_radio << " reachable?";
             log.warn(msg.str());
-            return {};
+            return out;
         }
-        spectrum = readKa9qPowerCsv(log_path, log);
+        out.spectrum = readKa9qPowerCsv(log_path, log);
         std::remove(log_path.c_str());
     }
-    if (spectrum.empty()) {
-        log.warn("scan powers produced no spectrum data");
-        return {};
+    if (out.spectrum.empty()) {
+        log.warn("scan powers produced no spectrum data [" + radio.name + "]");
+        return out;
     }
 
+    std::vector<SpectrumBin>& spectrum = out.spectrum;
     double nf = medianPower(spectrum);
     double trigger = nf + cfg.scan_threshold_db;
+    out.noise_floor = nf;
+    out.trigger = trigger;
     std::ostringstream nfmsg;
-
-    nfmsg << "scan noise_floor=" << nf << " dB threshold=" << cfg.scan_threshold_db << " dB trigger=" << trigger << " dB ";
+    nfmsg << "scan [" << radio.name << "] noise_floor=" << nf << " dB threshold=" << cfg.scan_threshold_db << " dB trigger=" << trigger << " dB ";
     log.info(nfmsg.str());
 
     auto addPeakIndex = [&](std::vector<size_t>& list, size_t idx) {
@@ -868,7 +890,7 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
         if (width_hz >= static_cast<double>(cfg.scan_min_peak_width_hz)) return true;
         if (cfg.verbose || cfg.decoder_debug) {
             std::ostringstream msg;
-            msg << "scan peak ignored " << (spectrum[idx].frequency_hz / 1e6)
+            msg << "scan [" << radio.name << "] peak ignored " << (spectrum[idx].frequency_hz / 1e6)
                 << " MHz width=" << width_hz << " Hz min=" << cfg.scan_min_peak_width_hz << " Hz";
             log.debug(msg.str());
         }
@@ -892,13 +914,13 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
     bool used_fallback = false;
     if (peak_idx.empty()) {
         if (!allow_fallback_candidates || cfg.scan_fallback_candidates <= 0) {
-            writeScanSpectrumJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
-            writeScanPeaksJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
-            return {};
+            out.peak_idx = peak_idx;
+            out.used_fallback = used_fallback;
+            return out;
         }
         used_fallback = true;
         std::ostringstream fbmsg;
-        fbmsg << "scan spectrum: no peaks above threshold, checking up to "
+        fbmsg << "scan [" << radio.name << "] spectrum: no peaks above threshold, checking up to "
               << cfg.scan_fallback_candidates << " strongest candidate(s) with snr >= "
               << cfg.scan_fallback_min_snr_db << " dB";
         log.info(fbmsg.str());
@@ -923,79 +945,84 @@ static std::vector<double> runKa9qPowerScanInner(const Config& cfg, Logger& log,
 
     if (static_cast<int>(peak_idx.size()) > cfg.scan_max_peaks) peak_idx.resize(static_cast<size_t>(cfg.scan_max_peaks));
 
-    writeScanSpectrumJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
-    writeScanPeaksJson(g_base_dir, spectrum, nf, trigger, peak_idx, used_fallback, log);
-
-    std::vector<double> peaks_hz;
-    std::vector<double> quantized_hz;
     for (size_t idx : peak_idx) {
-        if (isBlacklistedFrequencyHz(cfg, spectrum[idx].frequency_hz)) continue;
-        double q = static_cast<double>(cfg.scan_quantization_hz);
-        double raw_f = spectrum[idx].frequency_hz;
-        double q_f = std::round(raw_f / q) * q;
-        if (q_f < start_hz - q / 2.0 || q_f > stop_hz + q / 2.0) continue;
-        if (std::find_if(quantized_hz.begin(), quantized_hz.end(), [&](double old) { return std::fabs(old - q_f) < q / 2.0; }) != quantized_hz.end()) continue;
-        quantized_hz.push_back(q_f);
-        peaks_hz.push_back(raw_f);
         std::ostringstream msg;
-        msg << (used_fallback ? "scan candidate " : "scan peak ")
-            << (raw_f / 1e6) << " MHz";
-        if (std::fabs(raw_f - q_f) >= 100.0) {
-            msg << " channel=" << (q_f / 1e6) << " MHz";
-        }
-        msg << " level=" << spectrum[idx].power_db << " dB";
-        if (cfg.scan_min_peak_width_hz > 0) {
-            msg << " width=" << estimatePeakWidthHz(spectrum, idx, trigger) << " Hz";
-        }
+        msg << (used_fallback ? "scan candidate " : "scan peak ") << "[" << radio.name << "] "
+            << (spectrum[idx].frequency_hz / 1e6) << " MHz"
+            << " level=" << spectrum[idx].power_db << " dB";
+        if (cfg.scan_min_peak_width_hz > 0) msg << " width=" << estimatePeakWidthHz(spectrum, idx, trigger) << " Hz";
         if (used_fallback) msg << " snr=" << (spectrum[idx].power_db - nf) << " dB";
         log.info(msg.str());
     }
 
-    std::vector<double> ordered_hz;
-    std::vector<double> ordered_quantized_hz;
-    auto appendUnique = [&](double hz) {
-        if (!std::isfinite(hz) || hz <= 0.0) return;
-        if (isBlacklistedFrequencyHz(cfg, hz)) return;
-        const double q = static_cast<double>(cfg.scan_quantization_hz);
-        const double qhz = std::round(hz / q) * q;
-        for (double old_qhz : ordered_quantized_hz) {
-            if (std::fabs(old_qhz - qhz) < q / 2.0) return;
-        }
-        ordered_quantized_hz.push_back(qhz);
-        ordered_hz.push_back(hz);
-    };
-    for (double mhz : cfg.scan_whitelist_mhz) appendUnique(mhz * 1e6);
-    for (double hz : peaks_hz) appendUnique(hz);
-
-    if (ordered_hz.empty()) log.info("scan spectrum: no usable candidates");
-    return ordered_hz;
+    out.peak_idx = peak_idx;
+    out.used_fallback = used_fallback;
+    return out;
 }
 
-static std::vector<double> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
-    std::vector<double> result = runKa9qPowerScanInner(cfg, log, allow_fallback_candidates);
-
-    if (cfg.scan_whitelist_mhz.empty()) return result;
+static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+    std::vector<SpectrumBin> merged_spectrum;
+    std::vector<size_t> merged_peak_idx;
+    double merged_nf = NAN;
+    double merged_trigger = NAN;
+    bool any_fallback = false;
+    std::vector<ScanCandidate> candidates;
 
     const double q = static_cast<double>(cfg.scan_quantization_hz);
-    auto alreadyPresent = [&](double hz) {
-        for (double existing : result) {
-            if (std::fabs(existing - hz) < q / 2.0) return true;
+    std::vector<double> quantized_hz;
+    auto appendUnique = [&](double hz, const RadioBackend* radio) {
+        if (!std::isfinite(hz) || hz <= 0.0) return;
+        if (isBlacklistedFrequencyHz(cfg, hz)) return;
+        const double qhz = std::round(hz / q) * q;
+        for (double old_qhz : quantized_hz) {
+            if (std::fabs(old_qhz - qhz) < q / 2.0) return;
         }
-        return false;
+        quantized_hz.push_back(qhz);
+        candidates.push_back({hz, radio});
     };
 
-    for (double mhz : cfg.scan_whitelist_mhz) {
-        if (!std::isfinite(mhz) || mhz <= 0.0) continue;
-        const double hz = mhz * 1e6;
-        if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
-        if (alreadyPresent(hz)) continue;
-        if (cfg.verbose || cfg.decoder_debug) {
-            log.debug("scan whitelist_mhz: forcing candidate " + std::to_string(mhz) + " MHz");
-        }
-        result.push_back(hz);
+    for (const auto& radio : cfg.radios) {
+        BackendScanResult res = runKa9qPowerScanForRadio(cfg, radio, log, allow_fallback_candidates);
+        if (res.spectrum.empty()) continue;
+
+        const size_t offset = merged_spectrum.size();
+        merged_spectrum.insert(merged_spectrum.end(), res.spectrum.begin(), res.spectrum.end());
+        for (size_t idx : res.peak_idx) merged_peak_idx.push_back(idx + offset);
+        if (std::isfinite(res.noise_floor) && (!std::isfinite(merged_nf) || res.noise_floor < merged_nf)) merged_nf = res.noise_floor;
+        if (std::isfinite(res.trigger) && (!std::isfinite(merged_trigger) || res.trigger < merged_trigger)) merged_trigger = res.trigger;
+        any_fallback = any_fallback || res.used_fallback;
+
+        for (size_t idx : res.peak_idx) appendUnique(res.spectrum[idx].frequency_hz, &radio);
     }
 
-    return result;
+    if (!merged_spectrum.empty()) {
+        writeScanSpectrumJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
+        writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
+    }
+
+    // scan.whitelist_mhz frequencies are forced in regardless of measured
+    // power, routed to whichever backend's sub-band actually covers them.
+    for (double mhz : cfg.scan_whitelist_mhz) {
+        if (!std::isfinite(mhz) || mhz <= 0.0) continue;
+        if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
+        const RadioBackend* owner = nullptr;
+        for (const auto& radio : cfg.radios) {
+            if (mhz >= radio.scan_min_mhz && mhz <= radio.scan_max_mhz) { owner = &radio; break; }
+        }
+        if (!owner) {
+            if (cfg.verbose || cfg.decoder_debug) {
+                log.debug("scan whitelist_mhz " + std::to_string(mhz) + " MHz falls outside every configured radio range, skipped");
+            }
+            continue;
+        }
+        if (cfg.verbose || cfg.decoder_debug) {
+            log.debug("scan whitelist_mhz: forcing candidate " + std::to_string(mhz) + " MHz on [" + owner->name + "]");
+        }
+        appendUnique(mhz * 1e6, owner);
+    }
+
+    if (candidates.empty()) log.info("scan spectrum: no usable candidates");
+    return candidates;
 }
 
 static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log) {
@@ -1298,20 +1325,24 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
     if (static_cast<int>(active_count) >= cfg.scan_max_channels) return;
 
     const bool allow_fallback_candidates = (active_count == 0) || cfg.scan_fallback_when_active;
-    std::vector<double> peak_hz = runKa9qPowerScan(cfg, log, allow_fallback_candidates);
-    if (peak_hz.empty()) return;
+    std::vector<ScanCandidate> peaks = runKa9qPowerScan(cfg, log, allow_fallback_candidates);
+    if (peaks.empty()) return;
 
-    std::vector<double> candidates;
-    candidates.reserve(peak_hz.size());
-    for (double peak : peak_hz) {
-        const double f_mhz = peak / 1e6;
+    struct Candidate {
+        double f_mhz;
+        const RadioBackend* radio;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(peaks.size());
+    for (const auto& peak : peaks) {
+        const double f_mhz = peak.frequency_hz / 1e6;
         if (isBlacklistedFrequencyMhz(cfg, f_mhz)) {
             std::ostringstream msg;
             msg << "scan skip never-scan peak " << f_mhz << " MHz";
             log.debug(msg.str());
             continue;
         }
-        candidates.push_back(f_mhz);
+        candidates.push_back({f_mhz, peak.radio});
     }
     if (candidates.empty()) return;
 
@@ -1319,6 +1350,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
     struct Trial {
         double f_mhz;
+        const RadioBackend* radio;
         std::future<std::optional<ScanDetection>> fut;
     };
     std::vector<Trial> inflight;
@@ -1327,7 +1359,9 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
     auto tryLaunchMore = [&]() {
         while (next_idx < candidates.size() && inflight.size() < static_cast<size_t>(max_parallel)) {
-            const double f_mhz = candidates[next_idx++];
+            const double f_mhz = candidates[next_idx].f_mhz;
+            const RadioBackend* radio = candidates[next_idx].radio;
+            ++next_idx;
             {
                 std::lock_guard<std::mutex> lock(channels_mutex);
                 if (static_cast<int>(channels.size()) >= cfg.scan_max_channels) return;
@@ -1338,10 +1372,18 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     continue;
                 }
             }
+            // Detection (dft_detect) must run against the same KA9Q backend
+            // that saw this peak, not necessarily the first configured radio.
+            Config scan_cfg = cfg;
+            if (radio != nullptr) {
+                scan_cfg.ka9q_radio = radio->ka9q_radio;
+                scan_cfg.ka9q_pcm = radio->ka9q_pcm;
+            }
             inflight.push_back(Trial{
                 f_mhz,
-                std::async(std::launch::async, [&cfg, f_mhz, &log, &offset_cache]() {
-                    return runScanDetection(cfg, f_mhz, log, offset_cache);
+                radio,
+                std::async(std::launch::async, [scan_cfg, f_mhz, &log, &offset_cache]() {
+                    return runScanDetection(scan_cfg, f_mhz, log, offset_cache);
                 })
             });
         }
@@ -1357,6 +1399,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
             if (inflight[i].fut.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) continue;
 
             const double f_mhz = inflight[i].f_mhz;
+            const RadioBackend* radio = inflight[i].radio;
             auto det = inflight[i].fut.get();
             inflight.erase(inflight.begin() + static_cast<long>(i));
             progressed = true;
@@ -1380,6 +1423,10 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         chcfg.scan_enabled = false;
                         chcfg.frequency_mhz = start_freq;
                         chcfg.decoder = decoder_name;
+                        if (radio != nullptr) {
+                            chcfg.ka9q_radio = radio->ka9q_radio;
+                            chcfg.ka9q_pcm = radio->ka9q_pcm;
+                        }
 
                         if (decoder_name == "s1") {
                             // Windsond S1 needs a much wider KA9Q channel than the
@@ -1391,6 +1438,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
                         std::ostringstream hit;
                         hit << "scan detected " << det->sonde_type << " at " << f_mhz << " MHz";
+                        if (radio != nullptr) hit << " via [" << radio->name << "]";
                         if (std::fabs(det->offset_hz) > 0.1) {
                             hit << " offset=" << det->offset_hz << " Hz -> " << start_freq << " MHz";
                         }
@@ -1417,44 +1465,52 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
 static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
-    long long start_hz = freqHz(cfg.scan_min_mhz);
-    long long stop_hz = freqHz(cfg.scan_max_mhz);
-    double center_hz = (static_cast<double>(start_hz) + static_cast<double>(stop_hz)) / 2.0;
-    int bins = static_cast<int>(std::floor((static_cast<double>(stop_hz - start_hz)) / cfg.scan_power_bin_hz)) + 1;
-    if (bins < 8) bins = 8;
+    std::vector<SpectrumBin> merged_spectrum;
 
-    const std::string log_path = "/tmp/wsrx_live_power_" + std::to_string(::getpid()) + ".csv";
-    std::string ssrc = std::to_string(static_cast<long long>(std::llround(center_hz / 1000.0))) + "13";
+    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
+    // backend's spectrum in that order keeps the merged view frequency-ordered.
+    for (const auto& radio : cfg.radios) {
+        long long start_hz = freqHz(radio.scan_min_mhz);
+        long long stop_hz = freqHz(radio.scan_max_mhz);
+        double center_hz = (static_cast<double>(start_hz) + static_cast<double>(stop_hz)) / 2.0;
+        int bins = static_cast<int>(std::floor((static_cast<double>(stop_hz - start_hz)) / cfg.scan_power_bin_hz)) + 1;
+        if (bins < 8) bins = 8;
 
-    std::ostringstream cmd;
-    cmd << "timeout " << (cfg.live_spectrum_dwell_sec + 10) << " "
-        << powers << " " << shellQuote(cfg.ka9q_radio) << " "
-        << "-f " << static_cast<long long>(std::llround(center_hz)) << " "
-        << "-w " << cfg.scan_power_bin_hz << " "
-        << "-b " << bins << " "
-        << "-i " << cfg.live_spectrum_dwell_sec << " "
-        << "-s " << ssrc << " "
-        << "-c 2 > " << shellQuote(log_path) << " 2>/tmp/wsrx_live_power_" << ::getpid() << ".err";
+        const std::string log_path = "/tmp/wsrx_live_power_" + std::to_string(::getpid()) + "_" + radio.name + ".csv";
+        std::string ssrc = std::to_string(static_cast<long long>(std::llround(center_hz / 1000.0))) + "13";
 
-    std::vector<SpectrumBin> spectrum;
-    {
-        std::lock_guard<std::mutex> powers_lock(g_powers_mutex);
-        int rc = std::system(cmd.str().c_str());
-        if (rc != 0) {
-            if (cfg.verbose) {
-                std::ostringstream msg;
-                msg << "live spectrum powers failed rc=" << rc;
-                log.debug(msg.str());
+        std::ostringstream cmd;
+        cmd << "timeout " << (cfg.live_spectrum_dwell_sec + 10) << " "
+            << powers << " " << shellQuote(radio.ka9q_radio) << " "
+            << "-f " << static_cast<long long>(std::llround(center_hz)) << " "
+            << "-w " << cfg.scan_power_bin_hz << " "
+            << "-b " << bins << " "
+            << "-i " << cfg.live_spectrum_dwell_sec << " "
+            << "-s " << ssrc << " "
+            << "-c 2 > " << shellQuote(log_path) << " 2>/tmp/wsrx_live_power_" << ::getpid() << "_" << radio.name << ".err";
+
+        std::vector<SpectrumBin> spectrum;
+        {
+            std::lock_guard<std::mutex> powers_lock(g_powers_mutex);
+            int rc = std::system(cmd.str().c_str());
+            if (rc != 0) {
+                if (cfg.verbose) {
+                    std::ostringstream msg;
+                    msg << "live spectrum powers failed [" << radio.name << "] rc=" << rc;
+                    log.debug(msg.str());
+                }
+                continue;
             }
-            return;
+            spectrum = readKa9qPowerCsv(log_path, log);
+            std::remove(log_path.c_str());
         }
-        spectrum = readKa9qPowerCsv(log_path, log);
-        std::remove(log_path.c_str());
+        merged_spectrum.insert(merged_spectrum.end(), spectrum.begin(), spectrum.end());
     }
-    if (spectrum.empty()) return;
-    double nf = medianPower(spectrum);
+
+    if (merged_spectrum.empty()) return;
+    double nf = medianPower(merged_spectrum);
     double trigger = nf + cfg.scan_threshold_db;
-    writeLiveSpectrumJson(g_base_dir, spectrum, nf, trigger, log);
+    writeLiveSpectrumJson(g_base_dir, merged_spectrum, nf, trigger, log);
 }
 
 static void spectrumWorkerThread(const Config& cfg, Logger& log) {
@@ -1519,7 +1575,14 @@ int main(int argc, char** argv) {
         {
             std::ostringstream msg;
             msg << "auto scan enabled range=" << cfg.scan_min_mhz << "-" << cfg.scan_max_mhz
-                << " MHz step=" << cfg.scan_step_khz << " kHz max_channels=" << cfg.scan_max_channels;
+                << " MHz step=" << cfg.scan_step_khz << " kHz max_channels=" << cfg.scan_max_channels
+                << " radios=" << cfg.radios.size();
+            log.info(msg.str());
+        }
+        for (const auto& radio : cfg.radios) {
+            std::ostringstream msg;
+            msg << "radio [" << radio.name << "] " << radio.scan_min_mhz << "-" << radio.scan_max_mhz
+                << " MHz via " << radio.ka9q_radio << " / " << radio.ka9q_pcm;
             log.info(msg.str());
         }
 

@@ -4,6 +4,14 @@
 #include <string>
 #include <vector>
 
+struct RadioBackend {
+    std::string name = "default";
+    std::string ka9q_radio;
+    std::string ka9q_pcm;
+    double scan_min_mhz = 0.0;
+    double scan_max_mhz = 0.0;
+};
+
 struct Config {
     std::string config_file = "config.ini";
     std::string callsign;
@@ -17,6 +25,8 @@ struct Config {
 
     std::string ka9q_radio = "wettersonde.local";
     std::string ka9q_pcm = "wettersonde-pcm.local";
+
+    std::vector<RadioBackend> radios;
 
     std::string decoder_dir = "decoder";
     std::string wav_file;
