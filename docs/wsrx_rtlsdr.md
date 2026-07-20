@@ -1,5 +1,5 @@
-## wsrx and ka9q installation with RTL-SDR, 
-## using more than one rtls-sdr
+# wsrx and ka9q installation with RTL-SDR, 
+# using more than one rtls-sdr
 
 ## Installing KA9Q Radio
 
@@ -36,3 +36,55 @@ First rtl-sdr
 sudo nano radiod@rtl_1.conf
 ```
 
+```
+[global]
+hardware = rtlsdr
+status = rtl_1.local
+
+[rtlsdr]
+device = rtlsdr
+description = "rtl_1"
+gain = 38.0
+bias = false
+agc = false
+serial = 00000102 # Change serial
+```
+
+Second rtl-sdr
+
+```
+sudo nano radiod@rtl_2.conf
+```
+
+```
+[global]
+hardware = rtlsdr
+status = rtl_2.local
+
+[rtlsdr]
+device = rtlsdr
+description = "rtl_2"
+gain = 38.0
+bias = false
+agc = false
+serial = 00000102 # Change serial
+```
+
+Enable and start KA9Q:
+
+```
+sudo systemctl daemon-reload
+
+sudo systemctl enable radiod@rtl_1
+sudo systemctl start radiod@rtl_1
+
+sudo systemctl enable radiod@rtl_2
+sudo systemctl start radiod@rtl_2
+```
+Check if KA9Q is running:
+
+```
+sudo systemctl status radiod@rtl_1
+
+sudo systemctl status radiod@rtl_2
+```
