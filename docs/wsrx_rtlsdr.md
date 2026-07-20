@@ -88,3 +88,83 @@ sudo systemctl status radiod@rtl_1
 
 sudo systemctl status radiod@rtl_2
 ```
+
+## Installing wsrx 
+
+```
+cd $home
+
+git clone https://github.com/DO2JMG/wsrx.git
+
+cd wsrx
+
+make clean
+make
+
+cd decoder
+make clean
+make
+```
+
+## Configuring wsrx
+
+```
+nano /home/pi/wsrx/config.ini
+```
+Change your call sign and your coordinates. The call sign does not have to be an amateur radio call sign.
+
+```
+[station]
+callsign = NOCALL
+lat = 52.123456
+lon = 8.123456
+alt = 100
+```
+
+Change your radio settings for ka9q
+
+```
+[radio1]
+name = rtl1
+radio_name = rtl_1.local
+pcm_name = rtl_1-pcm.local
+min_mhz = 402.0
+max_mhz = 404.0
+
+[radio2]
+name = rtl2
+radio_name = rtl_2.local
+pcm_name = rtl_2-pcm.local
+min_mhz = 404.0
+max_mhz = 406.0
+```
+
+Make the executables and start scripts executable:
+
+```
+chmod +x /home/pi/wsrx/wsrx.sh
+chmod +x /home/pi/wsrx/update.sh
+```
+
+Starting wsrx and the web interface
+
+Start wsrx manually:
+
+```
+cd /home/pi/wsrx
+
+./wsrx.sh 
+```
+
+Stop wsrx manually:
+
+```
+cd /home/pi/wsrx
+
+./wsrx.sh stop
+```
+
+The web interface listens on port 8073 by default. Open it in your browser with the IP address of your receiver, for example:
+```
+http://receiver-ip-address:8073/
+```
