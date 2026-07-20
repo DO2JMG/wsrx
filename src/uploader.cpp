@@ -8,7 +8,7 @@
 #include <regex>
 
 namespace {
-constexpr const char* APP_VERSION = "0.1.01";
+constexpr const char* APP_VERSION = "0.1.02";
 constexpr const char* TELEMETRY_URL = "http://api.wettersonde.net/telemetrie.php";
 constexpr const char* POSITION_URL = "http://api.wettersonde.net/position.php";
 
