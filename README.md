@@ -29,7 +29,7 @@ The software is still under development, and there may still be some bugs.
 ### Hardware required:
 
 - Raspberry PI 4
-- Airspy mini or SDR-Play
+- Airspy mini or SDR-Play or RTL-SDR
 
 <p>&nbsp;</p>
 
