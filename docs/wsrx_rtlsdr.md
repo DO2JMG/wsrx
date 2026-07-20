@@ -1,5 +1,5 @@
 # wsrx and ka9q installation with RTL-SDR, 
-# using more than one rtls-sdr
+# using more than one rtl-sdr
 
 ## Installing KA9Q Radio
 
