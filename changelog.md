@@ -3,3 +3,4 @@ Version 0.1.02
   - Webinterface login
   - JSON udp upload
   - Selectable decoder
+  - Add APRS-Client
