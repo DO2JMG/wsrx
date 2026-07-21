@@ -170,6 +170,14 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_low_hz = iniInt(ini, "decoder.ka9q_low_hz", cfg.ka9q_low_hz);
     cfg.ka9q_high_hz = iniInt(ini, "decoder.ka9q_high_hz", cfg.ka9q_high_hz);
     cfg.iq_offset_hz = iniDouble(ini, "decoder.iq_offset_hz", cfg.iq_offset_hz);
+
+    cfg.decoder_type_rs41 = iniBool(ini, "decoder.rs41", cfg.decoder_type_rs41);
+    cfg.decoder_type_dfm9 = iniBool(ini, "decoder.dfm9", cfg.decoder_type_dfm9);
+    cfg.decoder_type_m10 = iniBool(ini, "decoder.m10", cfg.decoder_type_m10);
+    cfg.decoder_type_imet4 = iniBool(ini, "decoder.imet4", cfg.decoder_type_imet4);
+    cfg.decoder_type_meisei = iniBool(ini, "decoder.meisei", cfg.decoder_type_meisei);
+    cfg.decoder_type_c34c50 = iniBool(ini, "decoder.c34c50", cfg.decoder_type_c34c50);
+
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);
     cfg.scan_max_mhz = iniDouble(ini, "scan.max_mhz", cfg.scan_max_mhz);
@@ -206,6 +214,10 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.upload_enabled = iniBool(ini, "upload.enabled", cfg.upload_enabled);
     cfg.receiver_position_interval_sec = iniInt(ini, "upload.receiver_position_interval_sec", cfg.receiver_position_interval_sec);
 
+    cfg.udp_enabled = iniBool(ini, "udp.enabled", cfg.udp_enabled);
+    cfg.udp_host = iniGet(ini, "udp.host", cfg.udp_host);
+    cfg.udp_port = iniInt(ini, "udp.port", cfg.udp_port);
+
     cfg.dry_run = iniBool(ini, "runtime.dry_run", cfg.dry_run);
     cfg.verbose = iniBool(ini, "runtime.verbose", cfg.verbose);
     cfg.decoder_debug = iniBool(ini, "runtime.decoder_debug", cfg.decoder_debug);
@@ -227,6 +239,9 @@ Config Config::load(const Args& args, const std::string& config_file) {
     if (args.has("verbose")) cfg.verbose = true;
     if (args.has("decoder-debug")) cfg.decoder_debug = true;
     if (args.has("upload")) cfg.upload_enabled = true;
+    if (args.has("udp")) cfg.udp_enabled = true;
+    cfg.udp_host = args.get("udp-host", cfg.udp_host);
+    cfg.udp_port = args.getInt("udp-port", cfg.udp_port);
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = args.getDouble("scan-min", cfg.scan_min_mhz);
     cfg.scan_max_mhz = args.getDouble("scan-max", cfg.scan_max_mhz);

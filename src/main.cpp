@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "telemetryparser.h"
 #include "uploader.h"
+#include "udpout.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1025,6 +1026,32 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     return candidates;
 }
 
+// Builds the comma-separated dft_detect --types list from the per-type
+// [decoder] toggles in config.ini. dft_detect requires a non-empty list,
+// so if every type was disabled we fall back to scanning all of them
+// (and warn once via the caller-provided logger).
+static std::string buildScanTypesList(const Config& cfg, Logger& log) {
+    std::vector<std::string> types;
+    if (cfg.decoder_type_rs41) types.push_back("RS41");
+    if (cfg.decoder_type_dfm9) types.push_back("DFM9");
+    if (cfg.decoder_type_m10) types.push_back("M10");
+    if (cfg.decoder_type_imet4) types.push_back("IMET4");
+    if (cfg.decoder_type_meisei) types.push_back("MEISEI");
+    if (cfg.decoder_type_c34c50) types.push_back("C34C50");
+
+    if (types.empty()) {
+        log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50"};
+    }
+
+    std::string out;
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (i) out += ',';
+        out += types[i];
+    }
+    return out;
+}
+
 static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log) {
     cfg.frequency_mhz = frequency_mhz;
 
@@ -1061,7 +1088,7 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
         << " --catmode --raw " << shellQuote(cfg.ka9q_pcm)
         << " | " << shellQuote(dft_detect)
         << " -t " << cfg.scan_detect_dwell_sec
-        << " --types RS41,DFM9,M10,IMET4,MEISEI,C34C50"
+        << " --types " << buildScanTypesList(cfg, log)
         << " --iq --bw 15 --dc - "
         << cfg.sample_rate << " 16 2>/dev/null";
 
@@ -1249,7 +1276,7 @@ static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
     return ch;
 }
 
-static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log, Uploader& uploader, OffsetCache& offset_cache) {
+static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
     while (!g_shutdown && !ch->stop_requested.load()) {
         bool read_any = false;
         while (!g_shutdown && !ch->stop_requested.load()) {
@@ -1288,6 +1315,7 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
 
                 appendDecoderJsonLog(*frame);
                 uploader.sendTelemetry(*frame);
+                udp_sender.sendTelemetry(*frame);
             }
         }
 
@@ -1298,10 +1326,10 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
     ch->reader_exited.store(true);
 }
 
-static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config& base_cfg, Logger& log, Uploader& uploader, OffsetCache& offset_cache) {
+static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
     auto ch = startChannelProcess(cfg, log);
     Channel* ptr = ch.get();
-    ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(offset_cache));
+    ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(udp_sender), std::ref(offset_cache));
     return ch;
 }
 
@@ -1316,7 +1344,7 @@ static void stopChannel(Channel& ch, Logger& log) {
 }
 
 static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
-                                    std::mutex& channels_mutex, Uploader& uploader, OffsetCache& offset_cache) {
+                                    std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
     size_t active_count = 0;
     {
         std::lock_guard<std::mutex> lock(channels_mutex);
@@ -1445,7 +1473,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         if (!std::isnan(det->score)) hit << " score=" << det->score;
                         log.info(hit.str());
 
-                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, offset_cache);
+                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender, offset_cache);
                         channels.push_back(std::move(ch));
                     }
                 }
@@ -1528,7 +1556,7 @@ static void spectrumWorkerThread(const Config& cfg, Logger& log) {
 }
 
 static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
-                             std::mutex& channels_mutex, Uploader& uploader, OffsetCache& offset_cache) {
+                             std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
     auto last_scan = std::chrono::steady_clock::now() - std::chrono::seconds(cfg.scan_interval_sec + 1);
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
@@ -1540,7 +1568,7 @@ static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::un
         }
         if (since_scan >= cfg.scan_interval_sec && static_cast<int>(active_count) < cfg.scan_max_channels) {
             last_scan = now;
-            scanForChannelsThreaded(cfg, log, channels, channels_mutex, uploader, offset_cache);
+            scanForChannelsThreaded(cfg, log, channels, channels_mutex, uploader, udp_sender, offset_cache);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -1562,6 +1590,7 @@ int main(int argc, char** argv) {
         validateRequiredDecoderFiles(cfg);
         Logger log("", cfg.verbose);
         Uploader uploader(cfg, log);
+        UdpSender udp_sender(cfg, log);
         OffsetCache offset_cache;
         offset_cache.setPath(joinPath(g_base_dir, "offset_cache.txt"));
         log.debug("offset cache path: " + joinPath(g_base_dir, "offset_cache.txt"));
@@ -1595,7 +1624,7 @@ int main(int argc, char** argv) {
 
         spectrum_thread = std::thread(spectrumWorkerThread, std::cref(cfg), std::ref(log));
         scan_thread = std::thread(scanWorkerThread, std::cref(cfg), std::ref(log), std::ref(channels),
-                                  std::ref(channels_mutex), std::ref(uploader), std::ref(offset_cache));
+                                  std::ref(channels_mutex), std::ref(uploader), std::ref(udp_sender), std::ref(offset_cache));
 
 
         while (!g_shutdown) {

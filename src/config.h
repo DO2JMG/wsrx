@@ -35,6 +35,16 @@ struct Config {
     int ka9q_low_hz = -20000;
     int ka9q_high_hz = 20000;
     double iq_offset_hz = 0.0;
+
+    // Which sonde types dft_detect should scan for (used to build its
+    // --types argument). Default: all enabled, matching prior behaviour.
+    bool decoder_type_rs41 = true;
+    bool decoder_type_dfm9 = true;
+    bool decoder_type_m10 = true;
+    bool decoder_type_imet4 = true;
+    bool decoder_type_meisei = true;
+    bool decoder_type_c34c50 = true;
+
     bool scan_enabled = true;
     double scan_min_mhz = 400.0;
     double scan_max_mhz = 406.0;
@@ -73,6 +83,10 @@ struct Config {
     bool decoder_debug = false;
     bool upload_enabled = false;
     int receiver_position_interval_sec = 1800;
+
+    bool udp_enabled = false;
+    std::string udp_host = "127.0.0.1";
+    int udp_port = 18000;
 
 
     static Config load(const Args& args, const std::string& config_file);
