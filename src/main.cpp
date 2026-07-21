@@ -1038,6 +1038,7 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     if (cfg.decoder_type_imet4) types.push_back("IMET4");
     if (cfg.decoder_type_meisei) types.push_back("MEISEI");
     if (cfg.decoder_type_c34c50) types.push_back("C34C50");
+    if (cfg.decoder_type_s1) types.push_back("S1");
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
