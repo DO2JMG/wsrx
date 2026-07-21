@@ -4,6 +4,8 @@ With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radioso
 
 The software is still under development, and there may still be some bugs.
 
+The decoders were developed by Zilog80, and the open-source code can be found on GitHub (https://github.com/rs1729/RS). Many thanks to him for his great work.
+
 <img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
 
 <p>&nbsp;</p>
