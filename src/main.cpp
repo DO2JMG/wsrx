@@ -804,18 +804,11 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
-// A scan candidate frequency, tagged with the SDR/KA9Q backend that saw it,
-// so the caller knows which ka9q_radio/ka9q_pcm to open the real channel on.
 struct ScanCandidate {
     double frequency_hz = 0.0;
     const RadioBackend* radio = nullptr;
 };
 
-// Runs one KA9Q 'powers' spectrum sweep across a single backend's own
-// sub-band (radio.scan_min_mhz .. radio.scan_max_mhz) and returns the raw
-// spectrum plus the chosen peak indices for that backend alone. This is the
-// per-SDR building block; runKa9qPowerScan() below calls it once per
-// configured radio and merges the results.
 struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
@@ -1001,8 +994,6 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
     }
 
-    // scan.whitelist_mhz frequencies are forced in regardless of measured
-    // power, routed to whichever backend's sub-band actually covers them.
     for (double mhz : cfg.scan_whitelist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
@@ -1026,10 +1017,6 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     return candidates;
 }
 
-// Builds the comma-separated dft_detect --types list from the per-type
-// [decoder] toggles in config.ini. dft_detect requires a non-empty list,
-// so if every type was disabled we fall back to scanning all of them
-// (and warn once via the caller-provided logger).
 static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     std::vector<std::string> types;
     if (cfg.decoder_type_rs41) types.push_back("RS41");
@@ -1042,7 +1029,7 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
-        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50"};
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI"};
     }
 
     std::string out;
@@ -1401,8 +1388,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     continue;
                 }
             }
-            // Detection (dft_detect) must run against the same KA9Q backend
-            // that saw this peak, not necessarily the first configured radio.
+          
             Config scan_cfg = cfg;
             if (radio != nullptr) {
                 scan_cfg.ka9q_radio = radio->ka9q_radio;
@@ -1458,9 +1444,6 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         }
 
                         if (decoder_name == "s1") {
-                            // Windsond S1 needs a much wider KA9Q channel than the
-                            // narrowband sondes (large FM deviation) - 60 kHz total,
-                            // vs. the global default (usually 40 kHz for the others).
                             chcfg.ka9q_low_hz = -30000;
                             chcfg.ka9q_high_hz = 30000;
                         }
@@ -1496,8 +1479,6 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
     std::vector<SpectrumBin> merged_spectrum;
 
-    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
-    // backend's spectrum in that order keeps the merged view frequency-ordered.
     for (const auto& radio : cfg.radios) {
         long long start_hz = freqHz(radio.scan_min_mhz);
         long long stop_hz = freqHz(radio.scan_max_mhz);
