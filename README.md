@@ -223,7 +223,7 @@ The included start scripts already write log files into the wsrx directory. If y
 sudo nano /etc/systemd/system/wsrx.service
 ```
 
-Chance <username> to your username
+Chance ```<username>``` to your username
 
 ```
 [Unit]
