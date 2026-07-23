@@ -241,3 +241,28 @@ Show logs:
 tail -f /home/pi/wsrx/logs/wsrx.log
 tail -f /home/pi/wsrx/logs/wsrx-web.log
 ```
+
+## APRS Upload
+
+Optionally, you can also use an APRS client to send data to an APRS server. The APRS client is located in the aprs subdirectory.
+
+```
+ce aprs
+make clean
+make
+```
+
+You need to configure your APRS client in the aprs.ini file.
+
+Change your call sign and your coordinates. You'll need to set a passcode for your call sign. 
+
+```
+nano aprs.ini
+```
+
+Starting and stopping the APRS client
+
+```
+./aprs.sh start
+./aprs.sh stop
+```
