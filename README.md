@@ -37,7 +37,7 @@ The decoders were developed by rs1729, and the open-source code can be found on 
 - [Installing KA9Q Radio](#installing-ka9q-radio)
 - [Configuring KA9Q for Airspy Mini](#configuring-ka9q-for-airspy-mini)
 - [Optional: systemd service files](#optional-systemd-service-files)
-- [Optional: APRS Upload](#aprs-upload)
+- [Optional: APRS Upload](#optional-aprs-upload)
 
 ### Hardware required :
 
