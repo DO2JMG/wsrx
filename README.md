@@ -37,7 +37,7 @@ The decoders were developed by rs1729, and the open-source code can be found on 
 - [Installing KA9Q Radio](#installing-ka9q-radio)
 - [Configuring KA9Q for Airspy Mini](#configuring-ka9q-for-airspy-mini)
 - [Optional: systemd service files](#optional-systemd-service-files)
-- [APRS Upload](#aprs-upload)
+- [Optional: APRS Upload](#aprs-upload)
 
 ### Hardware required :
 
@@ -259,7 +259,7 @@ tail -f logs/wsrx.log
 tail -f logs/wsrx-web.log
 ```
 
-## APRS Upload
+## Optional: APRS Upload
 
 Optionally, you can also use an APRS client to send data to an APRS server. The APRS client is located in the aprs subdirectory.
 
