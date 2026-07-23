@@ -68,7 +68,7 @@ cd $home
 
 git clone https://github.com/DO2JMG/wsrx.git
 
-cd wsrx
+cd ~/wsrx
 
 make clean
 make
@@ -81,7 +81,8 @@ make
 ## Configuring wsrx
 
 ```
-nano /home/pi/wsrx/config.ini
+cd ~/wsrx
+nano config.ini
 ```
 
 Change your call sign and your coordinates. The call sign does not have to be an amateur radio call sign.
@@ -97,8 +98,9 @@ alt = 100
 Make the executables and start scripts executable:
 
 ```
-chmod +x /home/pi/wsrx/wsrx.sh
-chmod +x /home/pi/wsrx/update.sh
+cd ~/wsrx
+chmod +x wsrx.sh
+chmod +x update.sh
 ```
 
 ## Starting wsrx and the web interface
@@ -109,14 +111,14 @@ chmod +x /home/pi/wsrx/update.sh
 Start wsrx manually:
 
 ```
-cd /home/pi/wsrx
+cd ~/wsrx
 ./wsrx.sh 
 ```
 
 Stop wsrx manually:
 
 ```
-cd /home/pi/wsrx
+cd ~/wsrx
 ./wsrx.sh stop
 ```
 
@@ -129,6 +131,7 @@ http://receiver-ip-address:8073/
 Update wsrx:
 
 ```
+cd ~/wsrx
 ./update.sh
 ```
 
@@ -258,7 +261,7 @@ tail -f /home/pi/wsrx/logs/wsrx-web.log
 Optionally, you can also use an APRS client to send data to an APRS server. The APRS client is located in the aprs subdirectory.
 
 ```
-cd aprs
+cd ~/wsrx/aprs
 make clean
 make
 ```
@@ -268,6 +271,7 @@ You need to configure your APRS client in the aprs.ini file.
 Change your call sign and your coordinates. You'll need to set a passcode for your call sign. 
 
 ```
+cd ~/wsrx/aprs
 nano aprs.ini
 ```
 
