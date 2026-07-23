@@ -59,6 +59,8 @@ sudo apt install -y avahi-utils build-essential make gcc g++ git wget unzip rsyn
   libhackrf-dev libiniparser-dev libncurses5-dev libopus-dev librtlsdr-dev \
   libusb-1.0-0-dev libusb-dev portaudio19-dev libasound2-dev libogg-dev \
   uuid-dev libsamplerate-dev
+
+sudo apt install -y curl
 ```
 
 ## Installing wsrx
