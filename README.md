@@ -281,6 +281,7 @@ nano aprs.ini
 Starting and stopping the APRS client
 
 ```
+cd ~/wsrx/aprs
 ./aprs.sh start
 ./aprs.sh stop
 ```
