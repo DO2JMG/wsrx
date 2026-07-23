@@ -223,6 +223,8 @@ The included start scripts already write log files into the wsrx directory. If y
 sudo nano /etc/systemd/system/wsrx.service
 ```
 
+Chance <username> to your username
+
 ```
 [Unit]
 Description=wsrx radiosonde receiver
@@ -231,9 +233,9 @@ Wants=network-online.target radiod@wettersonde_rx.service
 
 [Service]
 Type=forking
-WorkingDirectory=/home/pi/wsrx
-ExecStart=/home/pi/wsrx/wsrx.sh start
-ExecStop=/home/pi/wsrx/wsrx.sh stop
+WorkingDirectory=/home/<username>/wsrx
+ExecStart=/home/<username>/wsrx/wsrx.sh start
+ExecStop=/home/<username>/wsrx/wsrx.sh stop
 Restart=always
 RestartSec=10
 
@@ -252,8 +254,9 @@ sudo systemctl start wsrx.service
 Show logs:
 
 ```
-tail -f /home/pi/wsrx/logs/wsrx.log
-tail -f /home/pi/wsrx/logs/wsrx-web.log
+cd ~/wsrx
+tail -f logs/wsrx.log
+tail -f logs/wsrx-web.log
 ```
 
 ## APRS Upload
