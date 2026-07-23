@@ -28,7 +28,12 @@ The decoders were developed by rs1729, and the open-source code can be found on 
 
 <p>&nbsp;</p>
 
-### Hardware required:
+## Table of Contents
+- [Hardware required](#Hardware_required)
+- [Requirements](#Requirements)
+- [Installing wsrx](#Installing_wsrx)
+
+### Hardware required :
 
 - Raspberry PI 4
 - Airspy mini or SDR-Play or RTL-SDR
