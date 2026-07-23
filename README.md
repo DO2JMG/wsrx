@@ -258,7 +258,7 @@ tail -f /home/pi/wsrx/logs/wsrx-web.log
 Optionally, you can also use an APRS client to send data to an APRS server. The APRS client is located in the aprs subdirectory.
 
 ```
-ce aprs
+cd aprs
 make clean
 make
 ```
