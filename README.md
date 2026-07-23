@@ -29,9 +29,15 @@ The decoders were developed by rs1729, and the open-source code can be found on 
 <p>&nbsp;</p>
 
 ## Table of Contents
-- [Hardware required](#Hardware_required)
-- [Requirements](#Requirements)
-- [Installing wsrx](#Installing_wsrx)
+- [Hardware required](#hardware-required)
+- [Requirements](#requirements)
+- [Installing wsrx](#installing-wsrx)
+- [Configuring wsrx](#configuring-wsrx)
+- [Starting wsrx and the web interface](#starting-wsrx-and-the-web-interface)
+- [Installing KA9Q Radio](#installing-ka9q-radio)
+- [Configuring KA9Q for Airspy Mini](#configuring-ka9q-for-airspy-mini)
+- [Optional: systemd service files](#optional-systemd-service-files)
+- [APRS Upload](#aprs-upload)
 
 ### Hardware required :
 
