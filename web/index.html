@@ -4,6 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wettersonde Web Interface</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('wettersonde-theme');
+        var theme = (saved === 'light' || saved === 'dark')
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -20,6 +31,7 @@
         <button data-action="restart">Restart</button>
         <button id="refreshBtn">Refresh</button>
         <button class="danger" data-action="clearlogs">Clear Logs</button>
+        <button id="themeToggle" class="theme-toggle" title="Design umschalten">🌙 Night</button>
       </div>
     </section>
 

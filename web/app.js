@@ -5,6 +5,62 @@ let peakHitboxes = [];
 let lastPlotMeta = null;
 let activeChannelFreqs = [];
 
+const THEME_KEY = 'wettersonde-theme';
+
+function getThemeColor(varName, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  return v || fallback;
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'light' ? ' Day' : ' Night';
+  try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+  if (lastSpectrum) drawSpectrum(lastSpectrum, lastPeaks);
+}
+
+function initTheme() {
+  let theme = 'dark';
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') {
+      theme = saved;
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      theme = 'light';
+    }
+  } catch (e) {}
+  applyTheme(theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  applyTheme(current === 'light' ? 'dark' : 'light');
+}
+
+function iniValue(text, section, key) {
+  if (!text) return null;
+  const lines = String(text).split(/\r?\n/);
+  let inSection = section === null;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+    const sectionMatch = line.match(/^\[(.+)\]$/);
+    if (sectionMatch) {
+      inSection = sectionMatch[1].trim().toLowerCase() === String(section).toLowerCase();
+      continue;
+    }
+    if (!inSection) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const k = line.slice(0, eq).trim().toLowerCase();
+    if (k === key.toLowerCase()) {
+      return line.slice(eq + 1).trim();
+    }
+  }
+  return null;
+}
+
 async function getJson(url) {
   const r = await fetch(url, { cache: 'no-store' });
   return await r.json();
@@ -65,6 +121,8 @@ function interpolatePalette(t, stops) {
 function drawActiveChannelMarkers(ctx, freqs, minF, maxF, padL, padT, plotW, plotH, dpr) {
   if (!Array.isArray(freqs) || !freqs.length) return;
   const yBase = padT + plotH;
+  const markerFill = getThemeColor('--plot-channel-marker', '#d25a3a');
+  const markerStroke = getThemeColor('--plot-channel-marker-border', '#7f321e');
   for (const freq of freqs) {
     const f = Number(freq);
     if (!Number.isFinite(f)) continue;
@@ -73,8 +131,8 @@ function drawActiveChannelMarkers(ctx, freqs, minF, maxF, padL, padT, plotW, plo
     const half = 6 * dpr;
     const topY = yBase + 2 * dpr;
     const tipY = yBase + 12 * dpr;
-    ctx.fillStyle = '#d25a3a';
-    ctx.strokeStyle = '#7f321e';
+    ctx.fillStyle = markerFill;
+    ctx.strokeStyle = markerStroke;
     ctx.lineWidth = 1 * dpr;
     ctx.beginPath();
     ctx.moveTo(xx - half, topY);
@@ -86,12 +144,27 @@ function drawActiveChannelMarkers(ctx, freqs, minF, maxF, padL, padT, plotW, plo
   }
 }
 
+let cachedCallsign = '';
+let lastConfigFetch = 0;
+const CONFIG_REFRESH_MS = 5000;
+
 async function refreshStatus() {
   try {
     const s = await getJson('/api/status');
     setHtml('running', s.running ? '<span class="ok">running</span>' : '<span class="bad">stopped</span>');
     setText('pid', s.pid || '-');
-    setText('path', s.base_dir || '');
+    const now = Date.now();
+    if (now - lastConfigFetch > CONFIG_REFRESH_MS) {
+      lastConfigFetch = now;
+      try {
+        const configText = await getText('/api/config');
+        const callsign = iniValue(configText, 'station', 'callsign');
+        cachedCallsign = callsign || '';
+      } catch (e) {
+        cachedCallsign = '';
+      }
+    }
+    setText('path', cachedCallsign ? ('Receiver: ' + cachedCallsign) : '');
     setText('statusText', s.raw || '');
     const channels = s.channels || [];
     activeChannelFreqs = channels.map(x => Number(x)).filter(x => Number.isFinite(x));
@@ -120,12 +193,12 @@ function drawSpectrum(spec, peaksDoc) {
 
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#0c1828';
+  ctx.fillStyle = getThemeColor('--plot-bg', '#0c1828');
   ctx.fillRect(0, 0, w, h);
 
   const points = spec && Array.isArray(spec.points) ? spec.points : [];
   if (!points.length) {
-    ctx.fillStyle = '#8b949e';
+    ctx.fillStyle = getThemeColor('--plot-empty-text', '#8b949e');
     ctx.font = `${13 * dpr}px system-ui`;
     ctx.fillText(spec && spec.error ? spec.error : 'No live spectrum available yet', 14 * dpr, 28 * dpr);
     info.textContent = 'Live spectrum: no data';
@@ -162,7 +235,15 @@ function drawSpectrum(spec, peaksDoc) {
   const x = f => padL + (f - minF) / (maxF - minF || 1) * plotW;
   const y = p => padT + (maxP - p) / (maxP - minP || 1) * plotH;
 
-  ctx.strokeStyle = '#507ba8';
+  const gridColor = getThemeColor('--plot-grid', '#507ba8');
+  const axisTextColor = getThemeColor('--plot-axis-text', '#507ba8');
+  const lineColor = getThemeColor('--plot-line', '#507ba8');
+  const triggerColor = getThemeColor('--plot-trigger', '#bf702b');
+  const peakColor = getThemeColor('--plot-peak', '#83c1ee');
+  const peakLineColor = getThemeColor('--plot-peak-line', '#296481');
+  const axisTitleColor = getThemeColor('--axis-title', '#c9d1d9');
+
+  ctx.strokeStyle = gridColor;
   ctx.lineWidth = 1 * dpr;
   ctx.beginPath();
   for (let i = 0; i <= 5; i++) {
@@ -172,7 +253,7 @@ function drawSpectrum(spec, peaksDoc) {
   }
   ctx.stroke();
 
-  ctx.fillStyle = '#507ba8';
+  ctx.fillStyle = axisTextColor;
   ctx.font = `${11 * dpr}px system-ui`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
@@ -188,7 +269,7 @@ function drawSpectrum(spec, peaksDoc) {
   }
 
   if (Number.isFinite(trig)) {
-    ctx.strokeStyle = '#bf702b';
+    ctx.strokeStyle = triggerColor;
     ctx.setLineDash([6 * dpr, 5 * dpr]);
     ctx.beginPath();
     ctx.moveTo(padL, y(trig));
@@ -197,7 +278,7 @@ function drawSpectrum(spec, peaksDoc) {
     ctx.setLineDash([]);
   }
 
-  ctx.strokeStyle = '#507ba8';
+  ctx.strokeStyle = lineColor;
   ctx.lineWidth = 1 * dpr;
   ctx.beginPath();
   points.forEach((p, i) => {
@@ -213,11 +294,11 @@ function drawSpectrum(spec, peaksDoc) {
   for (const pk of peaks) {
     const xx = x(pk[0]);
     const yy = y(pk[1]);
-    ctx.fillStyle = '#83c1ee';
+    ctx.fillStyle = peakColor;
     ctx.beginPath();
     ctx.arc(xx, yy, 5 * dpr, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#296481';
+    ctx.strokeStyle = peakLineColor;
     ctx.beginPath();
     ctx.moveTo(xx, yy);
     ctx.lineTo(xx, padT);
@@ -229,7 +310,7 @@ function drawSpectrum(spec, peaksDoc) {
 
   lastPlotMeta = { points, minF, maxF, minP, maxP, padL, padT, plotW, plotH, dpr };
 
-  ctx.fillStyle = '#c9d1d9';
+  ctx.fillStyle = axisTitleColor;
   ctx.font = `${12 * dpr}px system-ui`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
@@ -340,6 +421,10 @@ document.querySelectorAll('[data-action]').forEach(btn => {
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
 window.addEventListener('resize', () => { if (lastSpectrum) drawSpectrum(lastSpectrum, lastPeaks); });
 
+const themeToggleBtn = document.getElementById('themeToggle');
+if (themeToggleBtn) themeToggleBtn.addEventListener('click', toggleTheme);
+initTheme();
+
 function initSpectrumTooltip() {
   const canvas = document.getElementById('spectrumCanvas');
   const tooltip = document.getElementById('spectrumTooltip');
@@ -410,4 +495,3 @@ function initSpectrumTooltip() {
 initSpectrumTooltip();
 setInterval(refreshAll, 500);
 refreshAll();
-
