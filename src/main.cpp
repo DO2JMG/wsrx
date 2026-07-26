@@ -634,6 +634,43 @@ static double estimatePeakWidthHz(const std::vector<SpectrumBin>& spectrum, size
     return std::fabs(spectrum[right].frequency_hz - spectrum[left].frequency_hz);
 }
 
+// Maximum width (Hz) of spectral spikes to be smoothed away before noise-floor
+// estimation and peak search. Spikes narrower than this are replaced by the
+// median power of their local window; wider features (real radiosonde
+// signals) pass through effectively unchanged. Adjust to taste, or wire this
+// up to a config.ini option (see notes in chat).
+static constexpr double kScanSmoothMaxWidthHz = 2000.0;
+
+// Applies an in-place median filter over the power values of a frequency-
+// sorted spectrum. The filter window is derived from bin_hz so that it
+// covers approximately max_width_hz. Narrow single-bin (or few-bin) spikes
+// get pulled down to the local median, while peaks that are wider than the
+// window survive largely intact, since a majority of samples in the window
+// still belong to the peak.
+static void smoothNarrowSpikes(std::vector<SpectrumBin>& spectrum, double bin_hz, double max_width_hz) {
+    if (spectrum.size() < 3 || bin_hz <= 0.0 || max_width_hz <= 0.0) return;
+
+    int half = static_cast<int>(std::round((max_width_hz / bin_hz) / 2.0));
+    if (half < 1) return;
+
+    std::vector<double> smoothed;
+    smoothed.reserve(spectrum.size());
+
+    std::vector<double> window;
+    for (size_t i = 0; i < spectrum.size(); ++i) {
+        size_t lo = (i >= static_cast<size_t>(half)) ? i - static_cast<size_t>(half) : 0;
+        size_t hi = std::min(spectrum.size() - 1, i + static_cast<size_t>(half));
+
+        window.clear();
+        window.reserve(hi - lo + 1);
+        for (size_t j = lo; j <= hi; ++j) window.push_back(spectrum[j].power_db);
+
+        std::nth_element(window.begin(), window.begin() + window.size() / 2, window.end());
+        smoothed.push_back(window[window.size() / 2]);
+    }
+
+    for (size_t i = 0; i < spectrum.size(); ++i) spectrum[i].power_db = smoothed[i];
+}
 
 static void writeScanSpectrumJson(const std::string& base_dir,
                                   const std::vector<SpectrumBin>& spectrum,
@@ -804,11 +841,18 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
+// A scan candidate frequency, tagged with the SDR/KA9Q backend that saw it,
+// so the caller knows which ka9q_radio/ka9q_pcm to open the real channel on.
 struct ScanCandidate {
     double frequency_hz = 0.0;
     const RadioBackend* radio = nullptr;
 };
 
+// Runs one KA9Q 'powers' spectrum sweep across a single backend's own
+// sub-band (radio.scan_min_mhz .. radio.scan_max_mhz) and returns the raw
+// spectrum plus the chosen peak indices for that backend alone. This is the
+// per-SDR building block; runKa9qPowerScan() below calls it once per
+// configured radio and merges the results.
 struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
@@ -858,6 +902,8 @@ static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const Radio
         return out;
     }
 
+    smoothNarrowSpikes(out.spectrum, cfg.scan_power_bin_hz, kScanSmoothMaxWidthHz);
+
     std::vector<SpectrumBin>& spectrum = out.spectrum;
     double nf = medianPower(spectrum);
     double trigger = nf + cfg.scan_threshold_db;
@@ -870,7 +916,7 @@ static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const Radio
     auto addPeakIndex = [&](std::vector<size_t>& list, size_t idx) {
         const double min_dist_hz = static_cast<double>(cfg.scan_min_distance_hz);
         for (size_t& old_idx : list) {
-            if (std::fabs(spectrum[old_idx].frequency_hz - spectrum[idx].frequency_hz) < min_dist_hz) {
+            if (std::fabs(spectrum[old_idx].frequency_hz - spectrum[idx].frequency_hz) <= min_dist_hz) {
                 if (spectrum[idx].power_db > spectrum[old_idx].power_db) old_idx = idx;
                 return;
             }
@@ -994,6 +1040,8 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
     }
 
+    // scan.whitelist_mhz frequencies are forced in regardless of measured
+    // power, routed to whichever backend's sub-band actually covers them.
     for (double mhz : cfg.scan_whitelist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
@@ -1017,6 +1065,10 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     return candidates;
 }
 
+// Builds the comma-separated dft_detect --types list from the per-type
+// [decoder] toggles in config.ini. dft_detect requires a non-empty list,
+// so if every type was disabled we fall back to scanning all of them
+// (and warn once via the caller-provided logger).
 static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     std::vector<std::string> types;
     if (cfg.decoder_type_rs41) types.push_back("RS41");
@@ -1025,11 +1077,10 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     if (cfg.decoder_type_imet4) types.push_back("IMET4");
     if (cfg.decoder_type_meisei) types.push_back("MEISEI");
     if (cfg.decoder_type_c34c50) types.push_back("C34C50");
-    if (cfg.decoder_type_s1) types.push_back("S1");
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
-        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI"};
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50"};
     }
 
     std::string out;
@@ -1388,7 +1439,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     continue;
                 }
             }
-          
+            // Detection (dft_detect) must run against the same KA9Q backend
+            // that saw this peak, not necessarily the first configured radio.
             Config scan_cfg = cfg;
             if (radio != nullptr) {
                 scan_cfg.ka9q_radio = radio->ka9q_radio;
@@ -1444,6 +1496,9 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         }
 
                         if (decoder_name == "s1") {
+                            // Windsond S1 needs a much wider KA9Q channel than the
+                            // narrowband sondes (large FM deviation) - 60 kHz total,
+                            // vs. the global default (usually 40 kHz for the others).
                             chcfg.ka9q_low_hz = -30000;
                             chcfg.ka9q_high_hz = 30000;
                         }
@@ -1479,6 +1534,8 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
     std::vector<SpectrumBin> merged_spectrum;
 
+    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
+    // backend's spectrum in that order keeps the merged view frequency-ordered.
     for (const auto& radio : cfg.radios) {
         long long start_hz = freqHz(radio.scan_min_mhz);
         long long stop_hz = freqHz(radio.scan_max_mhz);
@@ -1518,6 +1575,7 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     }
 
     if (merged_spectrum.empty()) return;
+    smoothNarrowSpikes(merged_spectrum, cfg.scan_power_bin_hz, kScanSmoothMaxWidthHz);
     double nf = medianPower(merged_spectrum);
     double trigger = nf + cfg.scan_threshold_db;
     writeLiveSpectrumJson(g_base_dir, merged_spectrum, nf, trigger, log);
