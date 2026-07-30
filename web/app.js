@@ -381,8 +381,19 @@ async function refreshRadiosondes() {
   }
 }
 
+async function refreshCpu() {
+  try {
+    const c = await getJson('/api/cpu');
+    const pct = Number(c.cpu_percent);
+    setText('cpuLoad', Number.isFinite(pct) ? ('CPU: ' + pct.toFixed(1) + '%') : 'CPU: -');
+  } catch (e) {
+    setText('cpuLoad', 'CPU: -');
+  }
+}
+
 async function refreshAll() {
   await refreshStatus();
+  await refreshCpu();
   await refreshSpectrum();
   if (activeTab === 'log') setLogText(await getText('/api/log?lines=300'));
   if (activeTab === 'config') setText('configText', await getText('/api/config'));
@@ -492,6 +503,16 @@ function initSpectrumTooltip() {
   });
 }
 
+async function loadVersion() {
+  try {
+    const v = await getJson('/api/version');
+    setText('appVersion', v && v.version ? ('v' + v.version) : '');
+  } catch (e) {
+    setText('appVersion', '');
+  }
+}
+
 initSpectrumTooltip();
+loadVersion();
 setInterval(refreshAll, 500);
 refreshAll();

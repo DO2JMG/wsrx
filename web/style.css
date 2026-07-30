@@ -95,7 +95,37 @@ body {
   display: flex;
   align-items: center;
 }
+.version-badge {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 10px;
+  align-self: flex-end;
+  padding-bottom: 5px;
+}
 .hero-subtitle { color: var(--text); margin-bottom: 8px; }
+.path-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.path-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.cpu-badge {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.path-balloon {
+  display: block;
+  flex-shrink: 0;
+  opacity: .85;
+}
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

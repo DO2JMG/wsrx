@@ -21,9 +21,14 @@
   <main class="page wrap">
     <section class="hero" id="dashboard">
       <div class="hero-title-wrap">
-        <h1 class="hero-title"><img src="ballon.png" height="25px" style="padding-right:10px;"> Wettersonde Web Interface</h1>
+        <h1 class="hero-title"><img src="ballon.png" height="25px" style="padding-right:10px;"> Wettersonde Web Interface<span class="version-badge" id="appVersion"></span></h1>
         <div class="hero-subtitle">wettersonde.net - Monitoring, scan and decoder status</div>
-        <div class="muted small" id="path"></div>
+        <div class="path-row">
+          <div class="muted small" id="path"></div>
+          <div class="path-right">
+
+          </div>
+        </div>
       </div>
       <div class="row controls">
         <button class="primary" data-action="start">Start</button>
@@ -39,6 +44,8 @@
       <article class="info-card">
         <div class="label">Status</div>
         <div class="value" id="running">...</div>
+        <br>
+        <span class="cpu-badge small" id="cpuLoad">CPU: -</span>
       </article>
       <article class="info-card">
         <div class="label">PID</div>
