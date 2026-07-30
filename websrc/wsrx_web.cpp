@@ -226,6 +226,8 @@ struct App {
     std::string spectrum_file;
     std::string peaks_file;
     std::string sondes_dir;
+    std::string cpu_file;
+    std::string version_file;
     std::string web_auth_user;
     std::string web_auth_pass;
 };
@@ -359,6 +361,73 @@ static std::string tail_lines(const std::string &text, int lines) {
 }
 
 
+
+struct CpuTimes {
+    unsigned long long idle = 0;
+    unsigned long long total = 0;
+};
+
+static CpuTimes read_cpu_times() {
+    CpuTimes t;
+    std::ifstream f("/proc/stat");
+    std::string line;
+    if (!std::getline(f, line)) return t;
+    std::istringstream iss(line);
+    std::string cpu_label;
+    unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0,
+                        irq = 0, softirq = 0, steal = 0, guest = 0, guest_nice = 0;
+    iss >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal >> guest >> guest_nice;
+    t.idle = idle + iowait;
+    t.total = user + nice + system + idle + iowait + irq + softirq + steal;
+    return t;
+}
+
+static double cpu_usage_percent(const CpuTimes &prev, const CpuTimes &cur) {
+    if (cur.total <= prev.total) return 0.0;
+    unsigned long long d_total = cur.total - prev.total;
+    unsigned long long d_idle = (cur.idle >= prev.idle) ? (cur.idle - prev.idle) : 0;
+    double usage = (1.0 - static_cast<double>(d_idle) / static_cast<double>(d_total)) * 100.0;
+    if (usage < 0.0) usage = 0.0;
+    if (usage > 100.0) usage = 100.0;
+    return usage;
+}
+
+static void cpu_monitor_thread(App app) {
+    std::error_code ec;
+    std::filesystem::create_directories(dirname_of(app.cpu_file), ec);
+
+    CpuTimes prev = read_cpu_times();
+    std::vector<double> samples;
+
+    while (!g_stop) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (g_stop) break;
+
+        CpuTimes cur = read_cpu_times();
+        double pct = cpu_usage_percent(prev, cur);
+        prev = cur;
+        samples.push_back(pct);
+
+        if (samples.size() >= 3) {
+            double avg = 0.0;
+            for (double s : samples) avg += s;
+            avg /= static_cast<double>(samples.size());
+            samples.clear();
+
+            std::ostringstream js;
+            js << "{\"cpu_percent\":" << std::fixed << std::setprecision(1) << avg
+               << ",\"timestamp\":" << static_cast<long long>(time(nullptr)) << "}";
+
+            std::string tmp = app.cpu_file + ".tmp";
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (out) {
+                out << js.str();
+                out.close();
+                std::rename(tmp.c_str(), app.cpu_file.c_str());
+            }
+        }
+    }
+}
 
 static std::optional<double> extract_json_number(const std::string &line, const std::string &key) {
     std::string needle = "\"" + key + "\"";
@@ -573,6 +642,18 @@ static void handle_client(int fd, const App &app) {
             t = "{\"error\":\"scan_peaks.json not found yet\",\"peaks\":[]}";
         }
         send_response(fd, 200, "application/json", t);
+    } else if (path == "/api/cpu") {
+        std::string t = read_file(app.cpu_file, 4096);
+        if (t.empty()) {
+            t = "{\"error\":\"cpu_load.json not found yet\",\"cpu_percent\":null}";
+        }
+        send_response(fd, 200, "application/json", t);
+    } else if (path == "/api/version") {
+        std::string t = read_file(app.version_file, 4096);
+        if (t.empty()) {
+            t = "{\"version\":null}";
+        }
+        send_response(fd, 200, "application/json", t);
     } else if (path == "/api/radiosondes") {
         send_response(fd, 200, "application/json", radiosondes_json(app));
     } else if (path == "/api/clearlogs") {
@@ -632,6 +713,8 @@ int main(int argc, char **argv) {
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
     app.peaks_file = app.base_dir + "/data/scan_peaks.json";
     app.sondes_dir = app.base_dir + "/logs/sondes";
+    app.cpu_file = app.base_dir + "/data/cpu_load.json";
+    app.version_file = app.base_dir + "/data/version.json";
 
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) { perror("socket"); return 1; }
@@ -661,6 +744,8 @@ int main(int argc, char **argv) {
     } else {
         std::cout << "web auth: disabled (set web_auth_user/web_auth_password in config.ini [web] section to enable)\n";
     }
+
+    std::thread(cpu_monitor_thread, app).detach();
 
     while (!g_stop) {
         sockaddr_in caddr{};
