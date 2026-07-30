@@ -37,7 +37,7 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.03";
+static constexpr const char* APP_VERSION = "0.1.02";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -476,6 +476,16 @@ static std::vector<SpectrumBin> readKa9qPowerCsv(const std::string& path, Logger
     return bins;
 }
 
+// The KA9Q 'powers' tool can emit more than one CSV row covering the same
+// frequency range in a single invocation (e.g. multiple measurement cycles
+// via -c). readKa9qPowerCsv appends every row's bins verbatim, so the same
+// physical frequency can appear multiple times with slightly different
+// noise realizations. Left unmerged, independent noise on each copy can
+// shift the apparent peak frequency by a few bins between copies, producing
+// near-duplicate peaks that addPeakIndex's distance-based merge won't catch
+// if the shift exceeds scan_min_distance_hz. This averages same-frequency
+// bins together (in linear power, not dB) before peak search, which both
+// removes the duplication and improves SNR via averaging.
 static std::vector<SpectrumBin> mergeDuplicateFrequencyBins(std::vector<SpectrumBin> bins, double tolerance_hz) {
     if (bins.size() < 2 || tolerance_hz <= 0.0) return bins;
 
@@ -541,8 +551,19 @@ static double estimatePeakWidthHz(const std::vector<SpectrumBin>& spectrum, size
     return std::fabs(spectrum[right].frequency_hz - spectrum[left].frequency_hz);
 }
 
+// Maximum width (Hz) of spectral spikes to be smoothed away before noise-floor
+// estimation and peak search. Spikes narrower than this are replaced by the
+// median power of their local window; wider features (real radiosonde
+// signals) pass through effectively unchanged. Adjust to taste, or wire this
+// up to a config.ini option (see notes in chat).
 static constexpr double kScanSmoothMaxWidthHz = 2000.0;
 
+// Applies an in-place median filter over the power values of a frequency-
+// sorted spectrum. The filter window is derived from bin_hz so that it
+// covers approximately max_width_hz. Narrow single-bin (or few-bin) spikes
+// get pulled down to the local median, while peaks that are wider than the
+// window survive largely intact, since a majority of samples in the window
+// still belong to the peak.
 static void smoothNarrowSpikes(std::vector<SpectrumBin>& spectrum, double bin_hz, double max_width_hz) {
     if (spectrum.size() < 3 || bin_hz <= 0.0 || max_width_hz <= 0.0) return;
 
@@ -624,6 +645,36 @@ static void writeScanSpectrumJson(const std::string& base_dir,
         if (ec) log.warn("could not publish scan spectrum: " + out_path.string());
     } catch (const std::exception& e) {
         log.warn(std::string("could not write scan spectrum: ") + e.what());
+    }
+}
+
+static void writeVersionJson(const std::string& base_dir, Logger& log) {
+    try {
+        std::filesystem::path data_dir = std::filesystem::path(base_dir) / "data";
+        std::error_code ec;
+        std::filesystem::create_directories(data_dir, ec);
+        const std::filesystem::path tmp_path = data_dir / "version.json.tmp";
+        const std::filesystem::path out_path = data_dir / "version.json";
+
+        std::ofstream out(tmp_path, std::ios::trunc);
+        if (!out) {
+            log.warn("could not write version file: " + tmp_path.string());
+            return;
+        }
+
+        out << "{\n";
+        out << "  \"software\": \"wsrx\",\n";
+        out << "  \"version\": \"" << APP_VERSION << "\"\n";
+        out << "}\n";
+        out.close();
+        std::filesystem::rename(tmp_path, out_path, ec);
+        if (ec) {
+            std::filesystem::remove(out_path, ec);
+            std::filesystem::rename(tmp_path, out_path, ec);
+        }
+        if (ec) log.warn("could not publish version file: " + out_path.string());
+    } catch (const std::exception& e) {
+        log.warn(std::string("could not write version file: ") + e.what());
     }
 }
 
@@ -737,11 +788,18 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
+// A scan candidate frequency, tagged with the SDR/KA9Q backend that saw it,
+// so the caller knows which ka9q_radio/ka9q_pcm to open the real channel on.
 struct ScanCandidate {
     double frequency_hz = 0.0;
     const RadioBackend* radio = nullptr;
 };
 
+// Runs one KA9Q 'powers' spectrum sweep across a single backend's own
+// sub-band (radio.scan_min_mhz .. radio.scan_max_mhz) and returns the raw
+// spectrum plus the chosen peak indices for that backend alone. This is the
+// per-SDR building block; runKa9qPowerScan() below calls it once per
+// configured radio and merges the results.
 struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
@@ -930,6 +988,8 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
     }
 
+    // scan.whitelist_mhz frequencies are forced in regardless of measured
+    // power, routed to whichever backend's sub-band actually covers them.
     for (double mhz : cfg.scan_whitelist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
@@ -953,6 +1013,10 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     return candidates;
 }
 
+// Builds the comma-separated dft_detect --types list from the per-type
+// [decoder] toggles in config.ini. dft_detect requires a non-empty list,
+// so if every type was disabled we fall back to scanning all of them
+// (and warn once via the caller-provided logger).
 static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     std::vector<std::string> types;
     if (cfg.decoder_type_rs41) types.push_back("RS41");
@@ -1058,6 +1122,12 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     return det;
 }
 
+// dft_detect only reports the fine offset relative to the frequency it was
+// asked to look at. If the initial trial (e.g. a coarse spectral peak) is
+// several kHz away from the true carrier, one pass may only correct part of
+// that gap. Re-centering on the corrected frequency and re-running detection
+// lets the estimate converge on the actual carrier instead of leaving a
+// residual offset.
 static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& cfg, double frequency_mhz, Logger& log) {
     auto det = runSingleScanDetection(cfg, frequency_mhz, log);
     if (!det) return std::nullopt;
@@ -1309,7 +1379,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     continue;
                 }
             }
-
+            // Detection (dft_detect) must run against the same KA9Q backend
+            // that saw this peak, not necessarily the first configured radio.
             Config scan_cfg = cfg;
             if (radio != nullptr) {
                 scan_cfg.ka9q_radio = radio->ka9q_radio;
@@ -1365,6 +1436,9 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         }
 
                         if (decoder_name == "s1") {
+                            // Windsond S1 needs a much wider KA9Q channel than the
+                            // narrowband sondes (large FM deviation) - 60 kHz total,
+                            // vs. the global default (usually 40 kHz for the others).
                             chcfg.ka9q_low_hz = -30000;
                             chcfg.ka9q_high_hz = 30000;
                         }
@@ -1400,6 +1474,8 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
     std::vector<SpectrumBin> merged_spectrum;
 
+    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
+    // backend's spectrum in that order keeps the merged view frequency-ordered.
     for (const auto& radio : cfg.radios) {
         long long start_hz = freqHz(radio.scan_min_mhz);
         long long stop_hz = freqHz(radio.scan_max_mhz);
@@ -1501,6 +1577,7 @@ int main(int argc, char** argv) {
 
         log.info(std::string("wsrx ") + APP_VERSION + " started");
         log.info(std::string("programmed by Jean-Michael Grobel (DO2JMG)"));
+        writeVersionJson(g_base_dir, log);
         {
             std::ostringstream msg;
             msg << "auto scan enabled range=" << cfg.scan_min_mhz << "-" << cfg.scan_max_mhz
