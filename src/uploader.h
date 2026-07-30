@@ -17,7 +17,7 @@ public:
     bool maybeSendReceiverPosition();
 
 private:
-    bool allowedByRateLimit(const std::string& serial);
+    bool allowedByRateLimit(const std::string& serial, double alt_m, double speed_ms);
     bool hasGpsFix(const TelemetryFrame& frame) const;
     bool validTypeSerial(const TelemetryFrame& frame) const;
     std::string buildTelemetryPostData(const TelemetryFrame& frame) const;

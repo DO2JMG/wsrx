@@ -44,9 +44,6 @@ struct Config {
     bool decoder_type_imet4 = true;
     bool decoder_type_meisei = true;
     bool decoder_type_c34c50 = true;
-    // Windsond S1 is explicitly marked experimental in the README, so it
-    // stays opt-in unlike the other types.
-    bool decoder_type_s1 = false;
 
     bool scan_enabled = true;
     double scan_min_mhz = 400.0;
@@ -76,8 +73,6 @@ struct Config {
     int scan_fallback_candidates = 0;
     double scan_fallback_min_snr_db = 8.0;
     double scan_decoder_offset_hz = 0.0;
-    int scan_offset_search_hz = 5000;
-    int scan_offset_step_hz = 1000;
     int scan_max_channels = 4;
     int channel_timeout_sec = 180;
 

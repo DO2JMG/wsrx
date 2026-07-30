@@ -21,7 +21,6 @@
 #include <memory>
 #include <numeric>
 #include <optional>
-#include <map>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -38,7 +37,7 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.02";
+static constexpr const char* APP_VERSION = "0.1.03";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -376,132 +375,6 @@ struct ScanDetection {
     double score = NAN;
 };
 
-struct LearnedOffset {
-    double offset_hz = NAN;
-    std::time_t updated = 0;
-};
-
-class OffsetCache {
-public:
-    OffsetCache() = default;
-
-    void setPath(const std::string& path) {
-        path_ = path;
-    }
-
-    void load(Logger& log) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        cache_.clear();
-        if (path_.empty()) return;
-        std::ifstream in(path_);
-        if (!in) {
-            log.debug("offset cache not found yet: " + path_);
-            return;
-        }
-
-        std::string line;
-        int count = 0;
-        int skipped_stale = 0;
-        const std::time_t now = std::time(nullptr);
-        while (std::getline(in, line)) {
-            if (line.empty() || line[0] == '#') continue;
-            std::istringstream iss(line);
-            long long key = 0;
-            double offset = NAN;
-            long long ts = 0;
-            if (!(iss >> key >> offset >> ts)) continue;
-            if (!std::isfinite(offset)) continue;
-            if (std::fabs(offset) > 25000.0) continue;
-            if (now - static_cast<std::time_t>(ts) > MAX_AGE_SEC) {
-                ++skipped_stale;
-                continue;
-            }
-            cache_[key] = LearnedOffset{offset, static_cast<std::time_t>(ts)};
-            ++count;
-        }
-        if (count > 0 || skipped_stale > 0) {
-            std::ostringstream msg;
-            msg << "loaded " << count << " learned frequency offset(s) from " << path_
-                << " (" << skipped_stale << " stale entries dropped)";
-        }
-    }
-
-    std::optional<double> get(double mhz, int quantization_hz) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        long long key = keyFor(mhz, quantization_hz);
-        auto it = cache_.find(key);
-        if (it == cache_.end()) return std::nullopt;
-        if (!std::isfinite(it->second.offset_hz)) return std::nullopt;
-        const std::time_t age_sec = std::time(nullptr) - it->second.updated;
-        if (age_sec > MAX_AGE_SEC) return std::nullopt;
-        return it->second.offset_hz;
-    }
-
-    void update(double tx_mhz, double tuned_mhz, int quantization_hz, Logger& log) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!std::isfinite(tx_mhz) || !std::isfinite(tuned_mhz) || tx_mhz <= 0.0 || tuned_mhz <= 0.0) return;
-        double offset_hz = (tuned_mhz - tx_mhz) * 1000000.0;
-        if (!std::isfinite(offset_hz) || std::fabs(offset_hz) > 25000.0) return;
-
-        long long key = keyFor(tx_mhz, quantization_hz);
-        auto now = std::time(nullptr);
-        auto it = cache_.find(key);
-        bool changed = true;
-        if (it != cache_.end() && std::fabs(it->second.offset_hz - offset_hz) < 100.0) {
-            changed = false;
-            it->second.offset_hz = offset_hz;
-            it->second.updated = now;
-        } else {
-            cache_[key] = LearnedOffset{offset_hz, now};
-        }
-
-        std::ostringstream msg;
-        msg << (changed ? "learned" : "refreshed") << " offset for "
-            << (static_cast<double>(key) / 1000000.0)
-            << " MHz: " << offset_hz << " Hz (tuned=" << tuned_mhz
-            << " MHz tx=" << tx_mhz << " MHz)";
-        if (changed) log.info(msg.str()); else log.debug(msg.str());
-
-        const auto steady_now = std::chrono::steady_clock::now();
-        const bool due_for_periodic_save = last_save_.time_since_epoch().count() == 0 ||
-            std::chrono::duration_cast<std::chrono::seconds>(steady_now - last_save_).count() >= SAVE_MIN_INTERVAL_SEC;
-        if (changed || due_for_periodic_save) {
-            save(log);
-            last_save_ = steady_now;
-        }
-    }
-
-private:
-    static constexpr long long MAX_AGE_SEC = 7 * 24 * 3600;
-    static constexpr int SAVE_MIN_INTERVAL_SEC = 30;
-
-    static long long keyFor(double mhz, int quantization_hz) {
-        long long hz = static_cast<long long>(std::llround(mhz * 1000000.0));
-        long long q = std::max(1000, quantization_hz);
-        return static_cast<long long>(std::llround(static_cast<double>(hz) / static_cast<double>(q))) * q;
-    }
-
-    void save(Logger& log) const {
-        if (path_.empty()) return;
-        std::ofstream out(path_, std::ios::trunc);
-        if (!out) {
-            log.warn("could not write offset cache: " + path_);
-            return;
-        }
-        out << "# wsrx learned frequency offsets\n";
-        out << "# format: quantized_frequency_hz offset_hz unix_timestamp\n";
-        for (const auto& [key, value] : cache_) {
-            if (!std::isfinite(value.offset_hz)) continue;
-            out << key << ' ' << value.offset_hz << ' ' << static_cast<long long>(value.updated) << "\n";
-        }
-    }
-
-    std::string path_;
-    std::map<long long, LearnedOffset> cache_;
-    mutable std::mutex mutex_;
-    std::chrono::steady_clock::time_point last_save_{};
-};
-
 static std::optional<ScanDetection> parseDftDetectOutput(const std::string& output, double frequency_mhz) {
     if (output.empty()) return std::nullopt;
 
@@ -524,12 +397,12 @@ static std::optional<ScanDetection> parseDftDetectOutput(const std::string& outp
     if (det.sonde_type.empty()) return std::nullopt;
 
     std::smatch m;
-    static const std::regex score_re(R"(:\s*(-?[0-9]+(?:\.[0-9]+)?))");
+    static const std::regex score_re(R"(:\s*([+-]?[0-9]+(?:\.[0-9]+)?))");
     if (std::regex_search(first_line, m, score_re)) {
         det.score = std::stod(m[1].str());
     }
 
-    static const std::regex offset_re(R"(,\s*(-?[0-9]+(?:\.[0-9]+)?)\s*Hz)", std::regex_constants::icase);
+    static const std::regex offset_re(R"(,\s*([+-]?[0-9]+(?:\.[0-9]+)?)\s*Hz)", std::regex_constants::icase);
     if (std::regex_search(first_line, m, offset_re)) {
         det.offset_hz = std::stod(m[1].str());
     }
@@ -603,6 +476,40 @@ static std::vector<SpectrumBin> readKa9qPowerCsv(const std::string& path, Logger
     return bins;
 }
 
+static std::vector<SpectrumBin> mergeDuplicateFrequencyBins(std::vector<SpectrumBin> bins, double tolerance_hz) {
+    if (bins.size() < 2 || tolerance_hz <= 0.0) return bins;
+
+    std::sort(bins.begin(), bins.end(), [](const SpectrumBin& a, const SpectrumBin& b) {
+        return a.frequency_hz < b.frequency_hz;
+    });
+
+    std::vector<SpectrumBin> merged;
+    merged.reserve(bins.size());
+
+    std::vector<double> group_linear;
+    double group_freq_sum = 0.0;
+    auto flush = [&]() {
+        if (group_linear.empty()) return;
+        double power_sum = 0.0;
+        for (double p_db : group_linear) power_sum += std::pow(10.0, p_db / 10.0);
+        const double mean_power_db = 10.0 * std::log10(power_sum / static_cast<double>(group_linear.size()));
+        merged.push_back({group_freq_sum / static_cast<double>(group_linear.size()), mean_power_db});
+        group_linear.clear();
+        group_freq_sum = 0.0;
+    };
+
+    double group_anchor_hz = 0.0;
+    for (const auto& b : bins) {
+        if (!group_linear.empty() && std::fabs(group_anchor_hz - b.frequency_hz) > tolerance_hz) flush();
+        if (group_linear.empty()) group_anchor_hz = b.frequency_hz;
+        group_freq_sum += b.frequency_hz;
+        group_linear.push_back(b.power_db);
+    }
+    flush();
+
+    return merged;
+}
+
 static double medianPower(std::vector<SpectrumBin> bins) {
     if (bins.empty()) return NAN;
     std::vector<double> values;
@@ -634,19 +541,8 @@ static double estimatePeakWidthHz(const std::vector<SpectrumBin>& spectrum, size
     return std::fabs(spectrum[right].frequency_hz - spectrum[left].frequency_hz);
 }
 
-// Maximum width (Hz) of spectral spikes to be smoothed away before noise-floor
-// estimation and peak search. Spikes narrower than this are replaced by the
-// median power of their local window; wider features (real radiosonde
-// signals) pass through effectively unchanged. Adjust to taste, or wire this
-// up to a config.ini option (see notes in chat).
 static constexpr double kScanSmoothMaxWidthHz = 2000.0;
 
-// Applies an in-place median filter over the power values of a frequency-
-// sorted spectrum. The filter window is derived from bin_hz so that it
-// covers approximately max_width_hz. Narrow single-bin (or few-bin) spikes
-// get pulled down to the local median, while peaks that are wider than the
-// window survive largely intact, since a majority of samples in the window
-// still belong to the peak.
 static void smoothNarrowSpikes(std::vector<SpectrumBin>& spectrum, double bin_hz, double max_width_hz) {
     if (spectrum.size() < 3 || bin_hz <= 0.0 || max_width_hz <= 0.0) return;
 
@@ -841,18 +737,11 @@ static void writeScanPeaksJson(const std::string& base_dir,
     }
 }
 
-// A scan candidate frequency, tagged with the SDR/KA9Q backend that saw it,
-// so the caller knows which ka9q_radio/ka9q_pcm to open the real channel on.
 struct ScanCandidate {
     double frequency_hz = 0.0;
     const RadioBackend* radio = nullptr;
 };
 
-// Runs one KA9Q 'powers' spectrum sweep across a single backend's own
-// sub-band (radio.scan_min_mhz .. radio.scan_max_mhz) and returns the raw
-// spectrum plus the chosen peak indices for that backend alone. This is the
-// per-SDR building block; runKa9qPowerScan() below calls it once per
-// configured radio and merges the results.
 struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
@@ -902,6 +791,7 @@ static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const Radio
         return out;
     }
 
+    out.spectrum = mergeDuplicateFrequencyBins(out.spectrum, static_cast<double>(cfg.scan_power_bin_hz) / 2.0);
     smoothNarrowSpikes(out.spectrum, cfg.scan_power_bin_hz, kScanSmoothMaxWidthHz);
 
     std::vector<SpectrumBin>& spectrum = out.spectrum;
@@ -1040,8 +930,6 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
     }
 
-    // scan.whitelist_mhz frequencies are forced in regardless of measured
-    // power, routed to whichever backend's sub-band actually covers them.
     for (double mhz : cfg.scan_whitelist_mhz) {
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
@@ -1065,10 +953,6 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     return candidates;
 }
 
-// Builds the comma-separated dft_detect --types list from the per-type
-// [decoder] toggles in config.ini. dft_detect requires a non-empty list,
-// so if every type was disabled we fall back to scanning all of them
-// (and warn once via the caller-provided logger).
 static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     std::vector<std::string> types;
     if (cfg.decoder_type_rs41) types.push_back("RS41");
@@ -1174,6 +1058,27 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     return det;
 }
 
+static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& cfg, double frequency_mhz, Logger& log) {
+    auto det = runSingleScanDetection(cfg, frequency_mhz, log);
+    if (!det) return std::nullopt;
+
+    double current_mhz = frequency_mhz;
+    for (int iter = 0; iter < 2 && !g_shutdown; ++iter) {
+        if (std::fabs(det->frequency_mhz - current_mhz) < 0.0005) break; // < 500 Hz: converged
+        current_mhz = det->frequency_mhz;
+        auto refined = runSingleScanDetection(cfg, current_mhz, log);
+        if (!refined) break;
+        if (cfg.verbose) {
+            std::ostringstream msg;
+            msg << "scan refine " << refined->sonde_type << " re-centered at " << current_mhz
+                << " MHz -> " << refined->frequency_mhz << " MHz score=" << refined->score;
+            log.debug(msg.str());
+        }
+        det = refined;
+    }
+    return det;
+}
+
 static void addUniqueOffset(std::vector<double>& offsets, double value) {
     for (double old : offsets) {
         if (std::fabs(old - value) < 0.1) return;
@@ -1181,21 +1086,10 @@ static void addUniqueOffset(std::vector<double>& offsets, double value) {
     offsets.push_back(value);
 }
 
-static std::vector<double> buildOffsetTrialsHz(const Config& cfg, std::optional<double> learned_offset_hz) {
+static std::vector<double> buildOffsetTrialsHz(const Config& cfg) {
     std::vector<double> offsets;
 
-    if (learned_offset_hz && std::isfinite(*learned_offset_hz) && std::fabs(*learned_offset_hz) <= 25000.0) {
-        addUniqueOffset(offsets, *learned_offset_hz);
-    }
-
     addUniqueOffset(offsets, 0.0);
-
-    const int max_hz = std::max(0, cfg.scan_offset_search_hz);
-    const int step_hz = std::max(100, cfg.scan_offset_step_hz);
-    for (int hz = step_hz; hz <= max_hz; hz += step_hz) {
-        addUniqueOffset(offsets, static_cast<double>(hz));
-        addUniqueOffset(offsets, static_cast<double>(-hz));
-    }
 
     if (std::fabs(cfg.scan_decoder_offset_hz) > 0.1) {
         addUniqueOffset(offsets, cfg.scan_decoder_offset_hz);
@@ -1204,9 +1098,8 @@ static std::vector<double> buildOffsetTrialsHz(const Config& cfg, std::optional<
     return offsets;
 }
 
-static std::optional<ScanDetection> runScanDetection(const Config& cfg, double peak_mhz, Logger& log, const OffsetCache& offset_cache) {
-    auto learned = offset_cache.get(peak_mhz, cfg.scan_quantization_hz);
-    auto offsets = buildOffsetTrialsHz(cfg, learned);
+static std::optional<ScanDetection> runScanDetection(const Config& cfg, double peak_mhz, Logger& log) {
+    auto offsets = buildOffsetTrialsHz(cfg);
     std::optional<ScanDetection> best;
     double best_score = -1.0;
 
@@ -1218,14 +1111,13 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
             msg << offsets[i];
         }
         msg << " Hz";
-        if (learned) msg << " learned=" << *learned << " Hz";
         log.debug(msg.str());
     }
 
     for (double off_hz : offsets) {
         if (g_shutdown) break;
         const double trial_mhz = peak_mhz + off_hz / 1000000.0;
-        auto det = runSingleScanDetection(cfg, trial_mhz, log);
+        auto det = runSingleScanDetectionRefined(cfg, trial_mhz, log);
         if (!det) continue;
 
         double score = std::isnan(det->score) ? 0.0 : std::fabs(det->score);
@@ -1238,28 +1130,12 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
         } else if (score > best_score + score_margin) {
             take = true;
         } else if (std::fabs(score - best_score) <= score_margin) {
-            if (learned) {
-                take = std::fabs(candidate_offset_hz - *learned) < std::fabs(current_offset_hz - *learned);
-            } else {
-                take = std::fabs(candidate_offset_hz) < std::fabs(current_offset_hz);
-            }
+            take = std::fabs(candidate_offset_hz) < std::fabs(current_offset_hz);
         }
         if (take) {
             best = det;
             best_score = score;
             best->offset_hz = candidate_offset_hz;
-        }
-
-        const bool is_learned_trial = learned.has_value() && std::fabs(off_hz - *learned) < 0.5;
-        if (is_learned_trial && best_score >= cfg.scan_accept_score) {
-            if (cfg.verbose) {
-                std::ostringstream msg;
-                msg << "scan early-accept " << best->sonde_type << " near " << peak_mhz
-                    << " MHz score=" << best_score << " >= accept_score=" << cfg.scan_accept_score
-                    << " (learned offset confirmed, skipped remaining offset trials)";
-                log.debug(msg.str());
-            }
-            break;
         }
     }
 
@@ -1315,7 +1191,7 @@ static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
     return ch;
 }
 
-static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
+static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender) {
     while (!g_shutdown && !ch->stop_requested.load()) {
         bool read_any = false;
         while (!g_shutdown && !ch->stop_requested.load()) {
@@ -1346,12 +1222,6 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
                     << " lon=" << frame->lon
                     << " alt=" << frame->alt_m;
 
-                if (base_cfg.scan_enabled && std::isfinite(frame->tx_frequency_mhz) && frame->tx_frequency_mhz > 0.0) {
-                    offset_cache.update(frame->tx_frequency_mhz, ch->cfg.frequency_mhz, base_cfg.scan_quantization_hz, log);
-                } else if (base_cfg.scan_enabled && base_cfg.verbose) {
-                    log.debug("offset learning skipped: decoder JSON did not contain tx_frequency/freq");
-                }
-
                 appendDecoderJsonLog(*frame);
                 uploader.sendTelemetry(*frame);
                 udp_sender.sendTelemetry(*frame);
@@ -1365,10 +1235,10 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
     ch->reader_exited.store(true);
 }
 
-static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
+static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender) {
     auto ch = startChannelProcess(cfg, log);
     Channel* ptr = ch.get();
-    ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(udp_sender), std::ref(offset_cache));
+    ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(udp_sender));
     return ch;
 }
 
@@ -1383,7 +1253,7 @@ static void stopChannel(Channel& ch, Logger& log) {
 }
 
 static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
-                                    std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
+                                    std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender) {
     size_t active_count = 0;
     {
         std::lock_guard<std::mutex> lock(channels_mutex);
@@ -1439,8 +1309,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     continue;
                 }
             }
-            // Detection (dft_detect) must run against the same KA9Q backend
-            // that saw this peak, not necessarily the first configured radio.
+
             Config scan_cfg = cfg;
             if (radio != nullptr) {
                 scan_cfg.ka9q_radio = radio->ka9q_radio;
@@ -1449,8 +1318,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
             inflight.push_back(Trial{
                 f_mhz,
                 radio,
-                std::async(std::launch::async, [scan_cfg, f_mhz, &log, &offset_cache]() {
-                    return runScanDetection(scan_cfg, f_mhz, log, offset_cache);
+                std::async(std::launch::async, [scan_cfg, f_mhz, &log]() {
+                    return runScanDetection(scan_cfg, f_mhz, log);
                 })
             });
         }
@@ -1496,9 +1365,6 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         }
 
                         if (decoder_name == "s1") {
-                            // Windsond S1 needs a much wider KA9Q channel than the
-                            // narrowband sondes (large FM deviation) - 60 kHz total,
-                            // vs. the global default (usually 40 kHz for the others).
                             chcfg.ka9q_low_hz = -30000;
                             chcfg.ka9q_high_hz = 30000;
                         }
@@ -1512,7 +1378,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         if (!std::isnan(det->score)) hit << " score=" << det->score;
                         log.info(hit.str());
 
-                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender, offset_cache);
+                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender);
                         channels.push_back(std::move(ch));
                     }
                 }
@@ -1534,8 +1400,6 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
     std::vector<SpectrumBin> merged_spectrum;
 
-    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
-    // backend's spectrum in that order keeps the merged view frequency-ordered.
     for (const auto& radio : cfg.radios) {
         long long start_hz = freqHz(radio.scan_min_mhz);
         long long stop_hz = freqHz(radio.scan_max_mhz);
@@ -1596,7 +1460,7 @@ static void spectrumWorkerThread(const Config& cfg, Logger& log) {
 }
 
 static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
-                             std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender, OffsetCache& offset_cache) {
+                             std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender) {
     auto last_scan = std::chrono::steady_clock::now() - std::chrono::seconds(cfg.scan_interval_sec + 1);
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
@@ -1608,7 +1472,7 @@ static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::un
         }
         if (since_scan >= cfg.scan_interval_sec && static_cast<int>(active_count) < cfg.scan_max_channels) {
             last_scan = now;
-            scanForChannelsThreaded(cfg, log, channels, channels_mutex, uploader, udp_sender, offset_cache);
+            scanForChannelsThreaded(cfg, log, channels, channels_mutex, uploader, udp_sender);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -1631,10 +1495,6 @@ int main(int argc, char** argv) {
         Logger log("", cfg.verbose);
         Uploader uploader(cfg, log);
         UdpSender udp_sender(cfg, log);
-        OffsetCache offset_cache;
-        offset_cache.setPath(joinPath(g_base_dir, "offset_cache.txt"));
-        log.debug("offset cache path: " + joinPath(g_base_dir, "offset_cache.txt"));
-        offset_cache.load(log);
 
         std::signal(SIGINT, handleSignal);
         std::signal(SIGTERM, handleSignal);
@@ -1664,7 +1524,7 @@ int main(int argc, char** argv) {
 
         spectrum_thread = std::thread(spectrumWorkerThread, std::cref(cfg), std::ref(log));
         scan_thread = std::thread(scanWorkerThread, std::cref(cfg), std::ref(log), std::ref(channels),
-                                  std::ref(channels_mutex), std::ref(uploader), std::ref(udp_sender), std::ref(offset_cache));
+                                  std::ref(channels_mutex), std::ref(uploader), std::ref(udp_sender));
 
 
         while (!g_shutdown) {

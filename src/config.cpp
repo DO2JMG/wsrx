@@ -177,7 +177,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_imet4 = iniBool(ini, "decoder.imet4", cfg.decoder_type_imet4);
     cfg.decoder_type_meisei = iniBool(ini, "decoder.meisei", cfg.decoder_type_meisei);
     cfg.decoder_type_c34c50 = iniBool(ini, "decoder.c34c50", cfg.decoder_type_c34c50);
-    cfg.decoder_type_s1 = iniBool(ini, "decoder.s1", cfg.decoder_type_s1);
 
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);
@@ -207,8 +206,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_fallback_candidates = iniInt(ini, "scan.fallback_candidates", cfg.scan_fallback_candidates);
     cfg.scan_fallback_min_snr_db = iniDouble(ini, "scan.fallback_min_snr_db", cfg.scan_fallback_min_snr_db);
     cfg.scan_decoder_offset_hz = iniDouble(ini, "scan.decoder_offset_hz", cfg.scan_decoder_offset_hz);
-    cfg.scan_offset_search_hz = iniInt(ini, "scan.offset_search_hz", cfg.scan_offset_search_hz);
-    cfg.scan_offset_step_hz = iniInt(ini, "scan.offset_step_hz", cfg.scan_offset_step_hz);
     cfg.scan_max_channels = iniInt(ini, "scan.max_channels", cfg.scan_max_channels);
     cfg.channel_timeout_sec = iniInt(ini, "scan.channel_timeout_sec", cfg.channel_timeout_sec);
 
@@ -271,8 +268,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_fallback_candidates = args.getInt("scan-fallback-candidates", cfg.scan_fallback_candidates);
     cfg.scan_fallback_min_snr_db = args.getDouble("scan-fallback-min-snr", cfg.scan_fallback_min_snr_db);
     cfg.scan_decoder_offset_hz = args.getDouble("scan-decoder-offset-hz", cfg.scan_decoder_offset_hz);
-    cfg.scan_offset_search_hz = args.getInt("scan-offset-search-hz", cfg.scan_offset_search_hz);
-    cfg.scan_offset_step_hz = args.getInt("scan-offset-step-hz", cfg.scan_offset_step_hz);
     cfg.scan_max_channels = args.getInt("scan-max-channels", cfg.scan_max_channels);
     cfg.channel_timeout_sec = args.getInt("channel-timeout", cfg.channel_timeout_sec);
     cfg.receiver_position_interval_sec = args.getInt("position-interval", cfg.receiver_position_interval_sec);
@@ -324,10 +319,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
         if (std::fabs(cfg.scan_decoder_offset_hz) > 25000.0) {
             throw std::runtime_error("Invalid scan.decoder_offset_hz. Expected value within +/-25000 Hz.");
         }
-        if (cfg.scan_offset_search_hz < 0) cfg.scan_offset_search_hz = 0;
-        if (cfg.scan_offset_search_hz > 25000) cfg.scan_offset_search_hz = 25000;
-        if (cfg.scan_offset_step_hz < 100) cfg.scan_offset_step_hz = 100;
-        if (cfg.scan_offset_step_hz > cfg.scan_offset_search_hz && cfg.scan_offset_search_hz > 0) cfg.scan_offset_step_hz = cfg.scan_offset_search_hz;
     }
     if (cfg.station_lat == 0.0 && cfg.station_lon == 0.0) {
         throw std::runtime_error("Missing station position. Set station.lat/station.lon in config.ini or use -station-lat/-station-lon.");

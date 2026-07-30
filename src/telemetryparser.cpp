@@ -272,7 +272,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
 
     if (subtype) {
         const std::string upper_type_for_subtype = upperCopy(f.type);
-        if (upper_type_for_subtype.find("RS41") != std::string::npos) {
+        if (upper_type_for_subtype.find("RS41") != std::string::npos
+            || upper_type_for_subtype.find("DFM") != std::string::npos) {
             f.type = normalizeDFM(*subtype);
         }
     }

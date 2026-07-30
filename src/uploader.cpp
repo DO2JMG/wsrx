@@ -8,7 +8,7 @@
 #include <sstream>
 
 namespace {
-constexpr const char* APP_VERSION = "0.1.02";
+constexpr const char* APP_VERSION = "0.1.03";
 constexpr const char* TELEMETRY_URL = "http://api.wettersonde.net/telemetrie.php";
 constexpr const char* POSITION_URL = "http://api.wettersonde.net/position.php";
 
@@ -81,7 +81,7 @@ bool Uploader::sendTelemetry(const TelemetryFrame& frame) {
         return false;
     }
 
-    if (!allowedByRateLimit(frame.serial)) {
+    if (!allowedByRateLimit(frame.serial, frame.alt_m, frame.speed_ms)) {
         log_.debug("Rate-limited telemetry for " + frame.serial);
         return false;
     }
@@ -133,14 +133,21 @@ bool Uploader::maybeSendReceiverPosition() {
     return postWithCurl(POSITION_URL, oss.str());
 }
 
-bool Uploader::allowedByRateLimit(const std::string& serial) {
-    static constexpr int MIN_UPLOAD_INTERVAL_PER_SONDE_SEC = 10;
+bool Uploader::allowedByRateLimit(const std::string& serial, double alt_m, double speed_ms) {
+    static constexpr int DEFAULT_MIN_UPLOAD_INTERVAL_MS = 10000;
+    static constexpr int FAST_MIN_UPLOAD_INTERVAL_MS = 1000;
+    static constexpr double FAST_MAX_ALTITUDE_M = 2000.0;
+    static constexpr double FAST_MIN_SPEED_KMH = 3.0;
+
+    const double speed_kmh = std::isnan(speed_ms) ? 0.0 : speed_ms * 3.6;
+    const bool fast_mode = !std::isnan(alt_m) && alt_m < FAST_MAX_ALTITUDE_M && speed_kmh > FAST_MIN_SPEED_KMH;
+    const int min_interval_ms = fast_mode ? FAST_MIN_UPLOAD_INTERVAL_MS : DEFAULT_MIN_UPLOAD_INTERVAL_MS;
 
     auto now = std::chrono::steady_clock::now();
     auto it = last_upload_.find(serial);
     if (it != last_upload_.end()) {
-        auto diff = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
-        if (diff < MIN_UPLOAD_INTERVAL_PER_SONDE_SEC) return false;
+        auto diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count();
+        if (diff_ms < min_interval_ms) return false;
     }
     last_upload_[serial] = now;
     return true;

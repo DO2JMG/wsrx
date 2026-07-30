@@ -60,6 +60,14 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
+// Frequencies need kHz resolution (3 decimals in MHz), 1 decimal (100 kHz
+// steps) is too coarse and causes the uploaded frequency to drift from the
+// actual sonde frequency.
+void addNumber3(std::ostringstream& oss, bool& first, const std::string& key, double value) {
+    addComma(oss, first);
+    oss << '"' << key << "\":" << std::fixed << std::setprecision(3) << value << std::defaultfloat;
+}
+
 void addInt(std::ostringstream& oss, bool& first, const std::string& key, int value) {
     addComma(oss, first);
     oss << '"' << key << "\":" << value;
@@ -138,7 +146,7 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     addNumber1(oss, first, "speed", speed_kmh);
     addNumber1(oss, first, "direction", std::isnan(frame.heading_deg) ? 0.0 : frame.heading_deg);
     const double upload_frequency_mhz = !std::isnan(frame.tx_frequency_mhz) ? frame.tx_frequency_mhz : frame.frequency_mhz;
-    addNumber1(oss, first, "frequency", upload_frequency_mhz);
+    addNumber3(oss, first, "frequency", upload_frequency_mhz);
     addString(oss, first, "type", frame.type);
     addString(oss, first, "serial", frame.serial);
     addString(oss, first, "callsign", callsign);
