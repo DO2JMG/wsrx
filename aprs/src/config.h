@@ -27,6 +27,13 @@ struct AprsConfig {
     std::string udp_listen_host = "0.0.0.0";
     int udp_listen_port = 18000;
 
+    // [udp-out] - optional UDP forwarding of generated APRS frames,
+    // compatible with dxlAPRS udpgate4 / aprsmap (plain TNC2-style text
+    // lines terminated by CRLF, one per datagram).
+    bool udp_out_enabled = false;
+    std::string udp_out_host = "127.0.0.1";
+    int udp_out_port = 8438;
+
     bool verbose = false;
 
     static AprsConfig load(const std::string& config_file);

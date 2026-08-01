@@ -4,6 +4,7 @@
 #include "jsonlite.h"
 #include "logger.h"
 #include "ratelimiter.h"
+#include "udpforward.h"
 
 #include <atomic>
 #include <chrono>
@@ -60,14 +61,17 @@ int openUdpListenSocket(const AprsConfig& cfg, Logger& log) {
     return fd;
 }
 
-void stationBeaconLoop(const AprsConfig& cfg, AprsIsClient& aprs, Logger& log) {
+void stationBeaconLoop(const AprsConfig& cfg, AprsIsClient& aprs, UdpForwarder& udp_out, Logger& log) {
     if (cfg.station_beacon_interval_sec <= 0) return;
 
     constexpr int kRetryWhileDisconnectedSec = 10;
 
     while (!g_shutdown.load()) {
         std::string line = AprsFormat::buildStationBeacon(cfg);
-        if (aprs.sendLine(line)) {
+        bool aprs_ok = aprs.sendLine(line);
+        udp_out.send(line);  // fire-and-forget, independent of APRS-IS state
+
+        if (aprs_ok) {
             log.debug("Station beacon sent: " + line);
 
             for (int waited = 0; waited < cfg.station_beacon_interval_sec && !g_shutdown.load(); ++waited) {
@@ -116,15 +120,19 @@ int main(int argc, char** argv) {
     AprsIsClient aprs(cfg, log);
     aprs.start();
 
+    UdpForwarder udp_out(cfg, log);
+    udp_out.start();
+
     AltitudeRateLimiter rate_limiter;
 
-    std::thread beacon_thread(stationBeaconLoop, std::cref(cfg), std::ref(aprs), std::ref(log));
+    std::thread beacon_thread(stationBeaconLoop, std::cref(cfg), std::ref(aprs), std::ref(udp_out), std::ref(log));
 
     int udp_fd = openUdpListenSocket(cfg, log);
     if (udp_fd < 0) {
         g_shutdown = true;
         beacon_thread.join();
         aprs.stop();
+        udp_out.stop();
         return 1;
     }
 
@@ -155,6 +163,7 @@ int main(int argc, char** argv) {
 
         std::string line = AprsFormat::buildObjectReport(cfg, frame);
         bool ok = aprs.sendLine(line);
+        udp_out.send(line);  // fire-and-forget, independent of APRS-IS state
 
         if (ok) {
             log.info("Forwarded " + type + " " + serial + " to APRS-IS");
@@ -167,6 +176,7 @@ int main(int argc, char** argv) {
     ::close(udp_fd);
     beacon_thread.join();
     aprs.stop();
+    udp_out.stop();
     log.info("wsrx-aprs-gw stopped");
     return 0;
 }

@@ -101,6 +101,10 @@ AprsConfig AprsConfig::load(const std::string& config_file) {
     cfg.udp_listen_host = iniGet(ini, "udp.listen_host", cfg.udp_listen_host);
     cfg.udp_listen_port = iniInt(ini, "udp.listen_port", cfg.udp_listen_port);
 
+    cfg.udp_out_enabled = iniBool(ini, "udp-out.enabled", cfg.udp_out_enabled);
+    cfg.udp_out_host = iniGet(ini, "udp-out.host", cfg.udp_out_host);
+    cfg.udp_out_port = iniInt(ini, "udp-out.port", cfg.udp_out_port);
+
     cfg.verbose = iniBool(ini, "general.verbose", cfg.verbose);
 
     if (cfg.callsign.empty()) throw std::runtime_error("aprs.ini: [aprs-is] callsign is required");
