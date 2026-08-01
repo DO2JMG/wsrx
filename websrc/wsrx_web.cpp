@@ -24,6 +24,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <optional>
 
 static volatile sig_atomic_t g_stop = 0;
@@ -222,7 +223,6 @@ struct App {
     std::string config_file;
     std::string whitelist_file;
     std::string blacklist_file;
-    std::string offset_file;
     std::string spectrum_file;
     std::string peaks_file;
     std::string sondes_dir;
@@ -230,6 +230,8 @@ struct App {
     std::string version_file;
     std::string web_auth_user;
     std::string web_auth_pass;
+    double station_lat = std::numeric_limits<double>::quiet_NaN();
+    double station_lon = std::numeric_limits<double>::quiet_NaN();
 };
 
 static std::string http_date() {
@@ -469,15 +471,62 @@ static std::string strip_json_ext(const std::string &name) {
     return name;
 }
 
+static double haversine_km(double lat1, double lon1, double lat2, double lon2) {
+    constexpr double R = 6371.0088; // mean Earth radius, km
+    constexpr double kPi = 3.14159265358979323846;
+    const double dlat = (lat2 - lat1) * kPi / 180.0;
+    const double dlon = (lon2 - lon1) * kPi / 180.0;
+    const double a = std::sin(dlat / 2) * std::sin(dlat / 2) +
+                      std::cos(lat1 * kPi / 180.0) * std::cos(lat2 * kPi / 180.0) *
+                      std::sin(dlon / 2) * std::sin(dlon / 2);
+    const double c = 2 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
+    return R * c;
+}
+
+static std::string sanitize_serial(const std::string &s) {
+    std::string out;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '_' || c == '-') out.push_back(static_cast<char>(c));
+        else out.push_back('_');
+    }
+    if (out.empty()) out = "unknown";
+    return out;
+}
+
+static std::mutex g_launchsite_mutex;
+static std::map<std::string, std::string> g_launchsite_cache; 
+
+static std::string getLaunchsiteCached(const std::string &serial) {
+    {
+        std::lock_guard<std::mutex> lock(g_launchsite_mutex);
+        auto it = g_launchsite_cache.find(serial);
+        if (it != g_launchsite_cache.end()) return it->second;
+    }
+
+    const std::string safe_serial = sanitize_serial(serial);
+    const std::string url = "http://api.wettersonde.net/sonde.php?sonde=" + safe_serial + "&wsrx=1";
+    const std::string body = run_cmd("curl -fsS -m 6 " + shell_quote(url));
+    std::string site;
+    if (auto s = extract_json_string(body, "launchsite")) site = *s;
+
+    std::lock_guard<std::mutex> lock(g_launchsite_mutex);
+    g_launchsite_cache[serial] = site;
+    return site;
+}
+
 static std::string radiosondes_json(const App &app) {
     namespace fs = std::filesystem;
     struct Item {
         std::string serial;
         std::string type;
+        bool type_is_subtype = false;
         std::string first_time;
         std::string last_time;
         double first_alt = std::numeric_limits<double>::quiet_NaN();
         double last_alt = std::numeric_limits<double>::quiet_NaN();
+        double last_lat = std::numeric_limits<double>::quiet_NaN();
+        double last_lon = std::numeric_limits<double>::quiet_NaN();
+        double frequency_mhz = std::numeric_limits<double>::quiet_NaN();
         uintmax_t size = 0;
         long frames = 0;
         std::time_t modified = 0;
@@ -512,14 +561,21 @@ static std::string radiosondes_json(const App &app) {
         while (std::getline(f, line)) {
             if (line.find('{') == std::string::npos) continue;
             item.frames++;
-            if (item.type.empty()) {
-                if (auto t = extract_json_string(line, "subtype")) item.type = *t;
-                else if (auto t2 = extract_json_string(line, "type")) item.type = *t2;
+            if (auto t = extract_json_string(line, "subtype")) {
+                item.type = *t;
+                item.type_is_subtype = true;
+            } else if (!item.type_is_subtype && item.type.empty()) {
+                if (auto t2 = extract_json_string(line, "type")) item.type = *t2;
             }
             auto alt = extract_json_number(line, "alt");
             if (!alt) alt = extract_json_number(line, "altitude");
             auto dt = extract_json_string(line, "datetime");
             if (!dt) dt = extract_json_string(line, "time");
+            auto lat = extract_json_number(line, "lat");
+            if (!lat) lat = extract_json_number(line, "latitude");
+            auto lon = extract_json_number(line, "lon");
+            if (!lon) lon = extract_json_number(line, "longitude");
+            auto freq = extract_json_number(line, "wsrx_frequency");
 
             if (first_valid) {
                 if (alt) item.first_alt = *alt;
@@ -528,6 +584,9 @@ static std::string radiosondes_json(const App &app) {
             }
             if (alt) item.last_alt = *alt;
             if (dt) item.last_time = *dt;
+            if (lat) item.last_lat = *lat;
+            if (lon) item.last_lon = *lon;
+            if (freq) item.frequency_mhz = *freq;
         }
         if (item.frames > 0) items.push_back(item);
     }
@@ -549,12 +608,144 @@ static std::string radiosondes_json(const App &app) {
         if (std::isfinite(it.first_alt)) js << std::fixed << std::setprecision(1) << it.first_alt; else js << "null";
         js << ",\"last_altitude\":";
         if (std::isfinite(it.last_alt)) js << std::fixed << std::setprecision(1) << it.last_alt; else js << "null";
+        js << ",\"last_latitude\":";
+        if (std::isfinite(it.last_lat)) js << std::fixed << std::setprecision(6) << it.last_lat; else js << "null";
+        js << ",\"last_longitude\":";
+        if (std::isfinite(it.last_lon)) js << std::fixed << std::setprecision(6) << it.last_lon; else js << "null";
+        js << ",\"frequency\":";
+        if (std::isfinite(it.frequency_mhz)) js << std::fixed << std::setprecision(3) << it.frequency_mhz; else js << "null";
+        js << ",\"distance_km\":";
+        if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) &&
+            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            js << std::fixed << std::setprecision(1)
+               << haversine_km(app.station_lat, app.station_lon, it.last_lat, it.last_lon);
+        } else {
+            js << "null";
+        }
         js << ",\"first_time\":\"" << json_escape(it.first_time) << "\"";
         js << ",\"last_time\":\"" << json_escape(it.last_time) << "\"";
         js << ",\"modified\":" << static_cast<long long>(it.modified);
+        js << ",\"launchsite\":";
+        if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon)) {
+            std::string site = getLaunchsiteCached(it.serial);
+            if (!site.empty()) js << "\"" << json_escape(site) << "\""; else js << "null";
+        } else {
+            js << "null";
+        }
         js << "}";
     }
     js << "]}";
+    return js.str();
+}
+
+static std::string radiosonde_detail_json(const App &app, const std::string &serial_raw) {
+    namespace fs = std::filesystem;
+    const std::string serial = sanitize_serial(serial_raw);
+    const fs::path path = fs::path(app.sondes_dir) / (serial + ".json");
+
+    std::error_code ec;
+    if (!fs::exists(path, ec) || !fs::is_regular_file(path, ec)) {
+        return "{\"error\":\"no log found for serial " + json_escape(serial) + "\"}";
+    }
+
+    std::map<std::string, std::string> str_fields;
+    std::map<std::string, double> num_fields;
+    static const std::vector<std::string> string_keys = {
+        "type", "subtype", "id", "serial", "datetime", "time", "aux", "ref_datetime", "ref_position",
+        "rs41_mainboard"
+    };
+    static const std::vector<std::string> number_keys = {
+        "frame", "lat", "lon", "alt", "altitude", "vel_h", "heading", "vel_v", "sats", "sat",
+        "bt", "batt", "temp", "humidity", "pressure", "rssi", "burstkilltimer", "killtimer",
+        "wsrx_frequency", "rs41_mainboard_fw"
+    };
+    bool encrypted = false;
+    bool saw_encrypted = false;
+
+    double first_alt = std::numeric_limits<double>::quiet_NaN();
+    std::string first_time;
+    long frames = 0;
+    bool first_valid = true;
+
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.find('{') == std::string::npos) continue;
+        frames++;
+
+        for (const auto &k : string_keys) {
+            if (auto v = extract_json_string(line, k)) str_fields[k] = *v;
+        }
+        for (const auto &k : number_keys) {
+            if (auto v = extract_json_number(line, k)) num_fields[k] = *v;
+        }
+        if (line.find("\"encrypted\"") != std::string::npos) {
+            saw_encrypted = true;
+            encrypted = line.find("\"encrypted\": true") != std::string::npos ||
+                        line.find("\"encrypted\":true") != std::string::npos;
+        }
+
+        auto alt = extract_json_number(line, "alt");
+        if (!alt) alt = extract_json_number(line, "altitude");
+        auto dt = extract_json_string(line, "datetime");
+        if (!dt) dt = extract_json_string(line, "time");
+        if (first_valid) {
+            if (alt) first_alt = *alt;
+            if (dt) first_time = *dt;
+            first_valid = false;
+        }
+    }
+
+    if (frames == 0) {
+        return "{\"error\":\"no valid frames found for serial " + json_escape(serial) + "\"}";
+    }
+
+    std::time_t modified = 0;
+    auto ftime = fs::last_write_time(path, ec);
+    if (!ec) {
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+        modified = std::chrono::system_clock::to_time_t(sctp);
+    }
+
+    std::string display_type = str_fields.count("subtype") ? str_fields["subtype"]
+                              : (str_fields.count("type") ? str_fields["type"] : "");
+    std::string display_serial = str_fields.count("id") ? str_fields["id"]
+                                : (str_fields.count("serial") ? str_fields["serial"] : serial);
+
+    std::ostringstream js;
+    js << "{";
+    js << "\"serial\":\"" << json_escape(display_serial) << "\"";
+    js << ",\"type\":\"" << json_escape(display_type) << "\"";
+    js << ",\"frames\":" << frames;
+    js << ",\"modified\":" << static_cast<long long>(modified);
+    js << ",\"first_time\":\"" << json_escape(first_time) << "\"";
+    js << ",\"first_altitude\":";
+    if (std::isfinite(first_alt)) js << std::fixed << std::setprecision(1) << first_alt; else js << "null";
+    if (saw_encrypted) js << ",\"encrypted\":" << (encrypted ? "true" : "false");
+
+    for (const auto &k : string_keys) {
+        if (k == "type" || k == "subtype" || k == "id" || k == "serial") continue; // already surfaced above
+        auto it = str_fields.find(k);
+        js << ",\"" << k << "\":";
+        if (it != str_fields.end()) js << "\"" << json_escape(it->second) << "\""; else js << "null";
+    }
+    for (const auto &k : number_keys) {
+        auto it = num_fields.find(k);
+        js << ",\"" << k << "\":";
+        if (it != num_fields.end()) js << std::fixed << std::setprecision(6) << it->second << std::defaultfloat;
+        else js << "null";
+    }
+
+    if (num_fields.count("lat") && num_fields.count("lon") &&
+        std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+        js << ",\"distance_km\":" << std::fixed << std::setprecision(1)
+           << haversine_km(app.station_lat, app.station_lon, num_fields["lat"], num_fields["lon"]);
+    } else {
+        js << ",\"distance_km\":null";
+    }
+
+    js << "}";
     return js.str();
 }
 
@@ -618,10 +809,6 @@ static void handle_client(int fd, const App &app) {
         std::string t = read_file(app.blacklist_file, 256 * 1024);
         if (t.empty() && !file_exists(app.blacklist_file)) t = app.blacklist_file + " not found\n";
         send_response(fd, 200, "text/plain", t);
-    } else if (path == "/api/offsets") {
-        std::string t = read_file(app.offset_file, 256 * 1024);
-        if (t.empty() && !file_exists(app.offset_file)) t = "offset_cache.txt not found yet\n";
-        send_response(fd, 200, "text/plain", t);
     } else if (path == "/api/spectrum") {
         std::string t = read_file(app.spectrum_file, 2 * 1024 * 1024);
         if (t.empty() && !file_exists(app.spectrum_file)) {
@@ -656,6 +843,14 @@ static void handle_client(int fd, const App &app) {
         send_response(fd, 200, "application/json", t);
     } else if (path == "/api/radiosondes") {
         send_response(fd, 200, "application/json", radiosondes_json(app));
+    } else if (path == "/api/radiosonde") {
+        auto qm = parse_query(query);
+        std::string serial = qm.count("serial") ? qm["serial"] : "";
+        if (serial.empty()) {
+            send_response(fd, 400, "application/json", "{\"error\":\"missing serial parameter\"}");
+        } else {
+            send_response(fd, 200, "application/json", radiosonde_detail_json(app, serial));
+        }
     } else if (path == "/api/clearlogs") {
         if (method != "POST") send_response(fd, 405, "text/plain", "POST required\n");
         else {
@@ -708,8 +903,11 @@ int main(int argc, char **argv) {
         app.blacklist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "blacklist_file"), "blacklist.txt");
         app.web_auth_user = ini_value(ini_text, "web_auth_user");
         app.web_auth_pass = ini_value(ini_text, "web_auth_password");
+        std::string lat_str = ini_value(ini_text, "lat");
+        std::string lon_str = ini_value(ini_text, "lon");
+        try { if (!lat_str.empty()) app.station_lat = std::stod(lat_str); } catch (...) {}
+        try { if (!lon_str.empty()) app.station_lon = std::stod(lon_str); } catch (...) {}
     }
-    app.offset_file = app.base_dir + "/offset_cache.txt";
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
     app.peaks_file = app.base_dir + "/data/scan_peaks.json";
     app.sondes_dir = app.base_dir + "/logs/sondes";
