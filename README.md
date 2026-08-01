@@ -6,7 +6,13 @@ The software is still under development, and there may still be some bugs.
 
 The decoders were developed by rs1729, and the open-source code can be found on GitHub (https://github.com/rs1729/RS). Many thanks to him for his great work.
 
-<img width="1163" height="817" alt="screen" src="https://github.com/user-attachments/assets/5115b4b5-745f-42bd-826d-8c3da8e23535" />
+<img width="1157" height="711" alt="screen" src="https://github.com/user-attachments/assets/020529b4-bceb-4c48-ac5e-5314d9d2835e" />
+
+<img width="763" height="684" alt="screen1" src="https://github.com/user-attachments/assets/7c89d38e-161f-4f4d-b570-6c0ab3f717d6" />
+
+<img width="686" height="650" alt="screen2" src="https://github.com/user-attachments/assets/70fe3526-ae64-4f2b-879f-f91358f04056" />
+
+
 
 <p>&nbsp;</p>
 
