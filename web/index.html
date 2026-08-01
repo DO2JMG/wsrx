@@ -83,8 +83,8 @@
         <button class="tab" data-tab="config">Config</button>
         <button class="tab" data-tab="whitelist">Whitelist</button>
         <button class="tab" data-tab="blacklist">Blacklist</button>
-        <button class="tab" data-tab="offsets">Offset Cache</button>
         <button class="tab" data-tab="radiosondes">Radiosondes</button>
+        <button data-action="radar">Radar</button>
         <button class="tab" data-tab="rawstatus">Raw Status</button>
       </nav>
 
@@ -92,7 +92,6 @@
       <section id="config" class="pane"><pre id="configText">loading...</pre></section>
       <section id="whitelist" class="pane"><pre id="whitelistText">loading...</pre></section>
       <section id="blacklist" class="pane"><pre id="blacklistText">loading...</pre></section>
-      <section id="offsets" class="pane"><pre id="offsetText">loading...</pre></section>
       <section id="radiosondes" class="pane">
         <div class="table-wrap">
           <table class="sonde-table">
@@ -100,14 +99,17 @@
               <tr>
                 <th>Serial</th>
                 <th>Type</th>
+                <th>Frequency</th>
+                <th>Launchsite</th>
                 <th>First altitude</th>
                 <th>Last altitude</th>
+                <th>Distance</th>
                 <th>Frames</th>
                 <th>Last frame</th>
               </tr>
             </thead>
             <tbody id="radiosondeRows">
-              <tr><td colspan="6">loading...</td></tr>
+              <tr><td colspan="9">loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -115,6 +117,32 @@
       <section id="rawstatus" class="pane"><pre id="statusText">loading...</pre></section>
     </section>
   </main>
+
+  <dialog id="radarDialog" class="radar-dialog">
+    <div class="radar-dialog-head">
+      <h2>Radar</h2>
+      <button id="radarCloseBtn" class="radar-close" aria-label="Close">✕</button>
+    </div>
+    <div class="radar-body">
+      <canvas id="radarCanvas" width="400" height="400"></canvas>
+      <div class="radar-info">
+        <div class="muted small" id="radarStation">Station: -</div>
+        <div class="muted small" id="radarClosest">Closest sonde: -</div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="sondeDialog" class="radar-dialog sonde-dialog">
+    <div class="radar-dialog-head">
+      <h2 id="sondeDialogTitle">Radiosonde</h2>
+      <button id="sondeCloseBtn" class="radar-close" aria-label="Close">✕</button>
+    </div>
+    <div class="radar-body">
+      <table class="sonde-detail-table" id="sondeDetailTable">
+        <tbody></tbody>
+      </table>
+    </div>
+  </dialog>
 
   <script src="/app.js"></script>
 </body>
