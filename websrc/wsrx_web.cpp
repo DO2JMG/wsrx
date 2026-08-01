@@ -445,6 +445,44 @@ static std::optional<double> extract_json_number(const std::string &line, const 
     try { return std::stod(line.substr(p, e - p)); } catch (...) { return std::nullopt; }
 }
 
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static void append_utf8(std::string &out, unsigned int cp) {
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+// Tries to read a \uXXXX escape starting at line[p] == '\\'. On success,
+// returns the code point and advances p past the whole escape (to the
+// last character consumed); on failure, p is left unchanged.
+static std::optional<unsigned int> read_unicode_escape(const std::string &line, size_t &p) {
+    if (p + 5 >= line.size() || line[p] != '\\' || line[p + 1] != 'u') return std::nullopt;
+    int h0 = hex_val(line[p + 2]), h1 = hex_val(line[p + 3]), h2 = hex_val(line[p + 4]), h3 = hex_val(line[p + 5]);
+    if (h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0) return std::nullopt;
+    unsigned int cp = (static_cast<unsigned int>(h0) << 12) | (static_cast<unsigned int>(h1) << 8) |
+                       (static_cast<unsigned int>(h2) << 4) | static_cast<unsigned int>(h3);
+    p += 5;
+    return cp;
+}
+
 static std::optional<std::string> extract_json_string(const std::string &line, const std::string &key) {
     std::string needle = "\"" + key + "\"";
     size_t p = line.find(needle);
@@ -455,13 +493,40 @@ static std::optional<std::string> extract_json_string(const std::string &line, c
     if (p == std::string::npos) return std::nullopt;
     ++p;
     std::string out;
-    bool esc = false;
     for (; p < line.size(); ++p) {
         char c = line[p];
-        if (esc) { out.push_back(c); esc = false; continue; }
-        if (c == '\\') { esc = true; continue; }
         if (c == '"') return out;
-        out.push_back(c);
+        if (c != '\\' || p + 1 >= line.size()) {
+            out.push_back(c);
+            continue;
+        }
+
+        size_t up = p;
+        if (auto cp = read_unicode_escape(line, up)) {
+            unsigned int codepoint = *cp;
+            // Combine a UTF-16 surrogate pair into a single code point.
+            if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                size_t np = up + 1;
+                if (auto low = read_unicode_escape(line, np); low && *low >= 0xDC00 && *low <= 0xDFFF) {
+                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (*low - 0xDC00);
+                    up = np;
+                }
+            }
+            append_utf8(out, codepoint);
+            p = up;
+            continue;
+        }
+
+        char next = line[p + 1];
+        switch (next) {
+            case 'n': out.push_back('\n'); break;
+            case 't': out.push_back('\t'); break;
+            case 'r': out.push_back('\r'); break;
+            case 'b': out.push_back('\b'); break;
+            case 'f': out.push_back('\f'); break;
+            default: out.push_back(next); break; // handles \" \\ \/ etc.
+        }
+        ++p;
     }
     return std::nullopt;
 }
@@ -494,8 +559,12 @@ static std::string sanitize_serial(const std::string &s) {
 }
 
 static std::mutex g_launchsite_mutex;
-static std::map<std::string, std::string> g_launchsite_cache; 
+static std::map<std::string, std::string> g_launchsite_cache; // serial -> launchsite name ("" = looked up, none found)
 
+// Looks up the launch site for a sonde serial via wettersonde.net's own
+// matching (it already knows every sonde's first position server-side).
+// Result is cached in-process per serial so we only ever hit the API once
+// per sonde, no matter how often /api/radiosondes gets polled afterwards.
 static std::string getLaunchsiteCached(const std::string &serial) {
     {
         std::lock_guard<std::mutex> lock(g_launchsite_mutex);
@@ -648,6 +717,11 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
         return "{\"error\":\"no log found for serial " + json_escape(serial) + "\"}";
     }
 
+    // Every field we might see in a decoder JSON line (plus our injected
+    // wsrx_frequency), keyed by JSON key name. We keep the latest value
+    // seen for each, across the whole file, so the response has the most
+    // complete/current picture even if a given field is missing from the
+    // very last line.
     std::map<std::string, std::string> str_fields;
     std::map<std::string, double> num_fields;
     static const std::vector<std::string> string_keys = {
@@ -959,4 +1033,3 @@ int main(int argc, char **argv) {
     close(s);
     return 0;
 }
-
