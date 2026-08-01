@@ -26,6 +26,7 @@
 #include <cmath>
 #include <mutex>
 #include <optional>
+#include <set>
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -560,18 +561,9 @@ static std::string sanitize_serial(const std::string &s) {
 
 static std::mutex g_launchsite_mutex;
 static std::map<std::string, std::string> g_launchsite_cache; // serial -> launchsite name ("" = looked up, none found)
+static std::set<std::string> g_launchsite_pending;
 
-// Looks up the launch site for a sonde serial via wettersonde.net's own
-// matching (it already knows every sonde's first position server-side).
-// Result is cached in-process per serial so we only ever hit the API once
-// per sonde, no matter how often /api/radiosondes gets polled afterwards.
-static std::string getLaunchsiteCached(const std::string &serial) {
-    {
-        std::lock_guard<std::mutex> lock(g_launchsite_mutex);
-        auto it = g_launchsite_cache.find(serial);
-        if (it != g_launchsite_cache.end()) return it->second;
-    }
-
+static void fetchLaunchsiteBackground(std::string serial) {
     const std::string safe_serial = sanitize_serial(serial);
     const std::string url = "http://api.wettersonde.net/sonde.php?sonde=" + safe_serial + "&wsrx=1";
     const std::string body = run_cmd("curl -fsS -m 6 " + shell_quote(url));
@@ -580,7 +572,24 @@ static std::string getLaunchsiteCached(const std::string &serial) {
 
     std::lock_guard<std::mutex> lock(g_launchsite_mutex);
     g_launchsite_cache[serial] = site;
-    return site;
+    g_launchsite_pending.erase(serial);
+}
+
+// Looks up the launch site for a sonde serial via wettersonde.net's own
+// matching (it already knows every sonde's first position server-side).
+// Never blocks: if not cached yet, kicks off a background fetch (deduped
+// per serial via the pending-set) and returns nullopt immediately. The
+// result shows up on a later poll once the background fetch completes -
+// this must not block request handling, since /api/radiosondes can be
+// polled with many sondes at once.
+static std::optional<std::string> getLaunchsiteCached(const std::string &serial) {
+    std::lock_guard<std::mutex> lock(g_launchsite_mutex);
+    auto it = g_launchsite_cache.find(serial);
+    if (it != g_launchsite_cache.end()) return it->second;
+    if (g_launchsite_pending.insert(serial).second) {
+        std::thread(fetchLaunchsiteBackground, serial).detach();
+    }
+    return std::nullopt;
 }
 
 static std::string radiosondes_json(const App &app) {
@@ -696,8 +705,8 @@ static std::string radiosondes_json(const App &app) {
         js << ",\"modified\":" << static_cast<long long>(it.modified);
         js << ",\"launchsite\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon)) {
-            std::string site = getLaunchsiteCached(it.serial);
-            if (!site.empty()) js << "\"" << json_escape(site) << "\""; else js << "null";
+            auto site = getLaunchsiteCached(it.serial);
+            if (site && !site->empty()) js << "\"" << json_escape(*site) << "\""; else js << "null";
         } else {
             js << "null";
         }
