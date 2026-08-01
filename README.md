@@ -6,6 +6,18 @@ The software is still under development, and there may still be some bugs.
 
 The decoders were developed by rs1729, and the open-source code can be found on GitHub (https://github.com/rs1729/RS). Many thanks to him for his great work.
 
+What this software can do!
+
+- Send data to wettersonde.net via API
+- Send data to radiosondy.info or similar sites via APRS.
+- Send data via AXUDP to aprsmap or udpgate4
+- Use radar to locate radiosondes in the sky
+- List of all detected radiosondes
+- Detailed information on each radiosonde
+- The entire radiosonde frequency range is scanned
+- Radiosondes are automatically detected
+- Simultaneous decoding of multiple radiosondes
+
 <img width="1157" height="711" alt="screen" src="https://github.com/user-attachments/assets/020529b4-bceb-4c48-ac5e-5314d9d2835e" />
 
 <img style="display: inline-block;" height="384" alt="screen1" src="https://github.com/user-attachments/assets/7c89d38e-161f-4f4d-b570-6c0ab3f717d6" />
