@@ -8,9 +8,9 @@ The decoders were developed by rs1729, and the open-source code can be found on 
 
 <img width="1157" height="711" alt="screen" src="https://github.com/user-attachments/assets/020529b4-bceb-4c48-ac5e-5314d9d2835e" />
 
-<img width="763" height="684" alt="screen1" src="https://github.com/user-attachments/assets/7c89d38e-161f-4f4d-b570-6c0ab3f717d6" />
+<img width="763" height="484" alt="screen1" src="https://github.com/user-attachments/assets/7c89d38e-161f-4f4d-b570-6c0ab3f717d6" />
 
-<img width="686" height="650" alt="screen2" src="https://github.com/user-attachments/assets/70fe3526-ae64-4f2b-879f-f91358f04056" />
+<img width="686" height="450" alt="screen2" src="https://github.com/user-attachments/assets/70fe3526-ae64-4f2b-879f-f91358f04056" />
 
 
 
