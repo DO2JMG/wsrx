@@ -233,6 +233,7 @@ struct App {
     std::string web_auth_pass;
     double station_lat = std::numeric_limits<double>::quiet_NaN();
     double station_lon = std::numeric_limits<double>::quiet_NaN();
+    double station_alt = 0.0;
 };
 
 static std::string http_date() {
@@ -549,6 +550,37 @@ static double haversine_km(double lat1, double lon1, double lat2, double lon2) {
     return R * c;
 }
 
+// Initial great-circle bearing from (lat1,lon1) to (lat2,lon2), in degrees,
+// normalized to [0, 360). 0 = north, 90 = east, etc.
+static double bearing_deg(double lat1, double lon1, double lat2, double lon2) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double phi1 = lat1 * kPi / 180.0;
+    const double phi2 = lat2 * kPi / 180.0;
+    const double dlon = (lon2 - lon1) * kPi / 180.0;
+    const double y = std::sin(dlon) * std::cos(phi2);
+    const double x = std::cos(phi1) * std::sin(phi2) - std::sin(phi1) * std::cos(phi2) * std::cos(dlon);
+    double deg = std::atan2(y, x) * 180.0 / kPi;
+    if (deg < 0) deg += 360.0;
+    return deg;
+}
+
+static double elevation_deg(double lat1, double lon1, double alt1, double lat2, double lon2, double alt2) {
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kEarthRadius = 6371000.0; // meters
+    const double phi1 = lat1 * kPi / 180.0;
+    const double phi2 = lat2 * kPi / 180.0;
+    const double dlon = (lon2 - lon1) * kPi / 180.0;
+    const double central_angle = std::acos(
+        std::max(-1.0, std::min(1.0,
+            std::sin(phi1) * std::sin(phi2) + std::cos(phi1) * std::cos(phi2) * std::cos(dlon))));
+
+    const double ta = kEarthRadius + alt1;
+    const double tb = kEarthRadius + alt2;
+    const double ea = std::cos(central_angle) * tb - ta;
+    const double eb = std::sin(central_angle) * tb;
+    return std::atan2(ea, eb) * 180.0 / kPi;
+}
+
 static std::string sanitize_serial(const std::string &s) {
     std::string out;
     for (unsigned char c : s) {
@@ -575,13 +607,6 @@ static void fetchLaunchsiteBackground(std::string serial) {
     g_launchsite_pending.erase(serial);
 }
 
-// Looks up the launch site for a sonde serial via wettersonde.net's own
-// matching (it already knows every sonde's first position server-side).
-// Never blocks: if not cached yet, kicks off a background fetch (deduped
-// per serial via the pending-set) and returns nullopt immediately. The
-// result shows up on a later poll once the background fetch completes -
-// this must not block request handling, since /api/radiosondes can be
-// polled with many sondes at once.
 static std::optional<std::string> getLaunchsiteCached(const std::string &serial) {
     std::lock_guard<std::mutex> lock(g_launchsite_mutex);
     auto it = g_launchsite_cache.find(serial);
@@ -592,7 +617,7 @@ static std::optional<std::string> getLaunchsiteCached(const std::string &serial)
     return std::nullopt;
 }
 
-static std::string radiosondes_json(const App &app) {
+static std::string radiosondes_json(const App &app, long long max_age_sec) {
     namespace fs = std::filesystem;
     struct Item {
         std::string serial;
@@ -616,6 +641,8 @@ static std::string radiosondes_json(const App &app) {
         return "{\"radiosondes\":[],\"message\":\"logs/sondes not found yet\"}";
     }
 
+    const std::time_t now = std::time(nullptr);
+
     for (const auto &entry : fs::directory_iterator(app.sondes_dir, ec)) {
         if (ec) break;
         if (!entry.is_regular_file(ec)) continue;
@@ -632,6 +659,8 @@ static std::string radiosondes_json(const App &app) {
                 ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
             item.modified = std::chrono::system_clock::to_time_t(sctp);
         }
+
+        if (max_age_sec > 0 && item.modified > 0 && (now - item.modified) > max_age_sec) continue;
 
         std::ifstream f(path);
         std::string line;
@@ -700,6 +729,23 @@ static std::string radiosondes_json(const App &app) {
         } else {
             js << "null";
         }
+        js << ",\"bearing_deg\":";
+        if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) &&
+            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            js << std::fixed << std::setprecision(0)
+               << bearing_deg(app.station_lat, app.station_lon, it.last_lat, it.last_lon);
+        } else {
+            js << "null";
+        }
+        js << ",\"elevation_deg\":";
+        if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) && std::isfinite(it.last_alt) &&
+            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            js << std::fixed << std::setprecision(1)
+               << elevation_deg(app.station_lat, app.station_lon, app.station_alt,
+                                 it.last_lat, it.last_lon, it.last_alt);
+        } else {
+            js << "null";
+        }
         js << ",\"first_time\":\"" << json_escape(it.first_time) << "\"";
         js << ",\"last_time\":\"" << json_escape(it.last_time) << "\"";
         js << ",\"modified\":" << static_cast<long long>(it.modified);
@@ -726,11 +772,6 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
         return "{\"error\":\"no log found for serial " + json_escape(serial) + "\"}";
     }
 
-    // Every field we might see in a decoder JSON line (plus our injected
-    // wsrx_frequency), keyed by JSON key name. We keep the latest value
-    // seen for each, across the whole file, so the response has the most
-    // complete/current picture even if a given field is missing from the
-    // very last line.
     std::map<std::string, std::string> str_fields;
     std::map<std::string, double> num_fields;
     static const std::vector<std::string> string_keys = {
@@ -824,8 +865,23 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
         std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
         js << ",\"distance_km\":" << std::fixed << std::setprecision(1)
            << haversine_km(app.station_lat, app.station_lon, num_fields["lat"], num_fields["lon"]);
+        js << ",\"bearing_deg\":" << std::fixed << std::setprecision(0)
+           << bearing_deg(app.station_lat, app.station_lon, num_fields["lat"], num_fields["lon"]);
+
+        double target_alt = num_fields.count("alt") ? num_fields["alt"]
+                           : (num_fields.count("altitude") ? num_fields["altitude"]
+                           : std::numeric_limits<double>::quiet_NaN());
+        if (std::isfinite(target_alt)) {
+            js << ",\"elevation_deg\":" << std::fixed << std::setprecision(1)
+               << elevation_deg(app.station_lat, app.station_lon, app.station_alt,
+                                 num_fields["lat"], num_fields["lon"], target_alt);
+        } else {
+            js << ",\"elevation_deg\":null";
+        }
     } else {
         js << ",\"distance_km\":null";
+        js << ",\"bearing_deg\":null";
+        js << ",\"elevation_deg\":null";
     }
 
     js << "}";
@@ -925,7 +981,14 @@ static void handle_client(int fd, const App &app) {
         }
         send_response(fd, 200, "application/json", t);
     } else if (path == "/api/radiosondes") {
-        send_response(fd, 200, "application/json", radiosondes_json(app));
+        auto qm = parse_query(query);
+        long long max_age_sec = 0;
+        if (qm.count("active_sec")) {
+            try { max_age_sec = std::stoll(qm["active_sec"]); } catch (...) { max_age_sec = 0; }
+        } else if (qm.count("hours")) {
+            try { max_age_sec = static_cast<long long>(std::stod(qm["hours"]) * 3600.0); } catch (...) { max_age_sec = 0; }
+        }
+        send_response(fd, 200, "application/json", radiosondes_json(app, max_age_sec));
     } else if (path == "/api/radiosonde") {
         auto qm = parse_query(query);
         std::string serial = qm.count("serial") ? qm["serial"] : "";
@@ -988,8 +1051,10 @@ int main(int argc, char **argv) {
         app.web_auth_pass = ini_value(ini_text, "web_auth_password");
         std::string lat_str = ini_value(ini_text, "lat");
         std::string lon_str = ini_value(ini_text, "lon");
+        std::string alt_str = ini_value(ini_text, "alt");
         try { if (!lat_str.empty()) app.station_lat = std::stod(lat_str); } catch (...) {}
         try { if (!lon_str.empty()) app.station_lon = std::stod(lon_str); } catch (...) {}
+        try { if (!alt_str.empty()) app.station_alt = std::stod(alt_str); } catch (...) {}
     }
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
     app.peaks_file = app.base_dir + "/data/scan_peaks.json";
@@ -1042,3 +1107,4 @@ int main(int argc, char **argv) {
     close(s);
     return 0;
 }
+
