@@ -164,6 +164,7 @@ crontab -e
 
 ```
 0 * * * * find /home/<username>/wsrx/logs/sondes -name "*.json" -mtime +1 -delete
+0 3 * * * truncate -s 0 /home/<username>/wsrx/logs/wsrx.log
 ```
 
 <br><br>
