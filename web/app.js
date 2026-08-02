@@ -235,6 +235,9 @@ function drawSpectrum(spec, peaksDoc) {
   maxP = Math.ceil(maxP / 5) * 5;
   if (maxP - minP < 20) { maxP += 10; minP -= 10; }
 
+  // Smooth the axis bounds over time instead of snapping to the raw
+  // min/max of each noisy live snapshot - otherwise the whole plot visibly
+  // jumps every refresh even when the underlying signal is stable.
   if (spectrumAxisMinP === null || spectrumAxisMaxP === null) {
     spectrumAxisMinP = minP;
     spectrumAxisMaxP = maxP;
@@ -358,7 +361,8 @@ function smoothSpectrumPoints(points) {
     spectrumBinSmoothed.set(key, smoothed);
     return [freq, smoothed];
   });
-
+  // Drop bins that no longer appear (e.g. band range changed) so the map
+  // doesn't grow unbounded and stale entries don't linger.
   for (const key of Array.from(spectrumBinSmoothed.keys())) {
     if (!seen.has(key)) spectrumBinSmoothed.delete(key);
   }
@@ -449,6 +453,8 @@ async function refreshCpu() {
   }
 }
 
+let lastRadiosondesRefresh = 0;
+
 async function refreshAll() {
   await refreshStatus();
   await refreshCpu();
@@ -457,7 +463,15 @@ async function refreshAll() {
   if (activeTab === 'config') setText('configText', await getText('/api/config'));
   if (activeTab === 'whitelist') setText('whitelistText', await getText('/api/whitelist'));
   if (activeTab === 'blacklist') setText('blacklistText', await getText('/api/blacklist'));
-  if (activeTab === 'radiosondes') await refreshRadiosondes();
+  if (activeTab === 'radiosondes') {
+    // This reads and parses every sonde log file on the server, so it's
+    // much heavier than the other tabs - don't hammer it every 500ms.
+    const now = Date.now();
+    if (now - lastRadiosondesRefresh >= 4000) {
+      lastRadiosondesRefresh = now;
+      await refreshRadiosondes();
+    }
+  }
 }
 
 async function action(cmd) {
@@ -475,6 +489,7 @@ function showTab(id, btn) {
   document.getElementById(id).classList.add('active');
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
+  if (id === 'radiosondes') lastRadiosondesRefresh = 0; // show fresh data right away on tab switch
   refreshAll();
 }
 
@@ -655,6 +670,8 @@ async function radarDrawFrame() {
   const stationEl = document.getElementById('radarStation');
   const closestEl = document.getElementById('radarClosest');
 
+  // Fetch first, draw once the new data is ready — clearing the canvas
+  // before the fetch resolves is what caused the visible blink.
   let data;
   try {
     data = await getJson('/api/radiosondes');
@@ -852,7 +869,8 @@ async function loadSondeDetail(serial) {
     if (val === null || val === undefined || val === '') continue;
     rowsHtml += '<tr><td>' + escapeHtml(row.label) + '</td><td>' + escapeHtml(val) + '</td></tr>';
   }
- 
+  // Anything the backend sends that isn't part of a known row above still
+  // shows up, just without friendly formatting/grouping.
   for (const key of Object.keys(data)) {
     if (SONDE_DETAIL_CONSUMED_KEYS.has(key)) continue;
     const v = data[key];
