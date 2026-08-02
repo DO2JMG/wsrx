@@ -166,7 +166,7 @@ crontab -e
 0 * * * * find /home/<username>/wsrx/logs/sondes -name "*.json" -mtime +1 -delete
 ```
 
-
+<br><br>
 
 ## Installing KA9Q Radio
 
