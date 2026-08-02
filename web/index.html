@@ -93,6 +93,10 @@
       <section id="whitelist" class="pane"><pre id="whitelistText">loading...</pre></section>
       <section id="blacklist" class="pane"><pre id="blacklistText">loading...</pre></section>
       <section id="radiosondes" class="pane">
+        <div class="row radiosonde-filter">
+          <button class="tab active" data-hours="12" data-action="sonde-filter">12 hours</button>
+          <button class="tab" data-hours="0" data-action="sonde-filter">All</button>
+        </div>
         <div class="table-wrap">
           <table class="sonde-table">
             <thead>
@@ -141,6 +145,9 @@
       <table class="sonde-detail-table" id="sondeDetailTable">
         <tbody></tbody>
       </table>
+      <div class="sonde-dialog-footer">
+        <a id="sondeMapLink" href="#" target="_blank" rel="noopener">Show on map</a>
+      </div>
     </div>
   </dialog>
 

@@ -357,6 +357,13 @@ pre {
 
 .sonde-table tbody tr { cursor: pointer; }
 
+.radiosonde-filter { margin-bottom: 12px; margin-left: 10px; }
+.radiosonde-filter button {
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .sonde-dialog {
   width: fit-content;
   max-width: min(92vw, 720px);
@@ -381,3 +388,17 @@ pre {
   color: var(--value);
   word-break: break-word;
 }
+
+.sonde-dialog-footer {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  text-align: right;
+}
+.sonde-dialog-footer a {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sonde-dialog-footer a:hover { text-decoration: underline; }

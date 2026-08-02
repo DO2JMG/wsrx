@@ -235,9 +235,6 @@ function drawSpectrum(spec, peaksDoc) {
   maxP = Math.ceil(maxP / 5) * 5;
   if (maxP - minP < 20) { maxP += 10; minP -= 10; }
 
-  // Smooth the axis bounds over time instead of snapping to the raw
-  // min/max of each noisy live snapshot - otherwise the whole plot visibly
-  // jumps every refresh even when the underlying signal is stable.
   if (spectrumAxisMinP === null || spectrumAxisMaxP === null) {
     spectrumAxisMinP = minP;
     spectrumAxisMaxP = maxP;
@@ -361,8 +358,7 @@ function smoothSpectrumPoints(points) {
     spectrumBinSmoothed.set(key, smoothed);
     return [freq, smoothed];
   });
-  // Drop bins that no longer appear (e.g. band range changed) so the map
-  // doesn't grow unbounded and stale entries don't linger.
+
   for (const key of Array.from(spectrumBinSmoothed.keys())) {
     if (!seen.has(key)) spectrumBinSmoothed.delete(key);
   }
@@ -401,6 +397,19 @@ function fmtDistance(v) {
   return Number(v).toFixed(1) + ' km';
 }
 
+function fmtDistanceBearing(distKm, bearing, elevation) {
+  const dist = fmtDistance(distKm);
+  const parts = [];
+  if (bearing !== null && bearing !== undefined && !Number.isNaN(Number(bearing))) {
+    parts.push(Number(bearing).toFixed(0) + '\u00b0 az');
+  }
+  if (elevation !== null && elevation !== undefined && !Number.isNaN(Number(elevation))) {
+    parts.push(Number(elevation).toFixed(1) + '\u00b0 el');
+  }
+  if (!parts.length) return dist;
+  return dist === '-' ? parts.join(', ') : dist + ', ' + parts.join(', ');
+}
+
 function fmtFrequency(v) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
   return Number(v).toFixed(3) + ' MHz';
@@ -411,35 +420,59 @@ function fmtTime(v) {
   return String(v).replace('T', ' ').replace('.000Z', ' UTC').replace('Z', ' UTC');
 }
 
-async function refreshRadiosondes() {
+let radiosondesHours = 12;
+const ACTIVE_SONDE_MAX_AGE_SEC = 600; // 10 minutes - matches the radar's own freshness window
+let sondesCache = new Map(); // serial -> sonde row data
+
+function renderRadiosondesTable() {
+  const rows = document.getElementById('radiosondeRows');
+  if (!rows) return;
+  const sondes = Array.from(sondesCache.values());
+  if (!sondes.length) {
+    rows.innerHTML = '<tr><td class="empty" colspan="9">No radiosonde logs found for this time range</td></tr>';
+    return;
+  }
+  sondes.sort((a, b) => (b.modified || 0) - (a.modified || 0));
+  rows.innerHTML = sondes.map(s => `
+    <tr data-serial="${escapeHtml(s.serial || '')}">
+      <td>${s.serial || '-'}</td>
+      <td>${s.type || '-'}</td>
+      <td>${fmtFrequency(s.frequency)}</td>
+      <td>${s.launchsite || '-'}</td>
+      <td>${fmtAltitude(s.first_altitude)}</td>
+      <td>${fmtAltitude(s.last_altitude)}</td>
+      <td>${fmtDistanceBearing(s.distance_km, s.bearing_deg, s.elevation_deg)}</td>
+      <td>${s.frames ?? '-'}</td>
+      <td>${fmtTime(s.last_time)}</td>
+    </tr>
+  `).join('');
+  rows.querySelectorAll('tr[data-serial]').forEach(tr => {
+    tr.addEventListener('click', () => openSondeDetail(tr.dataset.serial));
+  });
+}
+
+// Full reload respecting the 12h/All filter - replaces the whole cache.
+// Only needed on tab switch / filter change, not on every periodic poll.
+async function loadRadiosondesFull() {
   try {
-    const data = await getJson('/api/radiosondes');
-    const rows = document.getElementById('radiosondeRows');
-    if (!rows) return;
+    const data = await getJson('/api/radiosondes?hours=' + radiosondesHours);
     const sondes = Array.isArray(data.radiosondes) ? data.radiosondes : [];
-    if (!sondes.length) {
-      rows.innerHTML = '<tr><td class="empty" colspan="9">No radiosonde logs found yet</td></tr>';
-      return;
-    }
-    rows.innerHTML = sondes.map(s => `
-      <tr data-serial="${escapeHtml(s.serial || '')}">
-        <td>${s.serial || '-'}</td>
-        <td>${s.type || '-'}</td>
-        <td>${fmtFrequency(s.frequency)}</td>
-        <td>${s.launchsite || '-'}</td>
-        <td>${fmtAltitude(s.first_altitude)}</td>
-        <td>${fmtAltitude(s.last_altitude)}</td>
-        <td>${fmtDistance(s.distance_km)}</td>
-        <td>${s.frames ?? '-'}</td>
-        <td>${fmtTime(s.last_time)}</td>
-      </tr>
-    `).join('');
-    rows.querySelectorAll('tr[data-serial]').forEach(tr => {
-      tr.addEventListener('click', () => openSondeDetail(tr.dataset.serial));
-    });
+    sondesCache = new Map(sondes.map(s => [s.serial, s]));
+    renderRadiosondesTable();
   } catch (e) {
     const rows = document.getElementById('radiosondeRows');
     if (rows) rows.innerHTML = '<tr><td class="empty" colspan="9">Could not load radiosonde list</td></tr>';
+  }
+}
+
+async function refreshRadiosondesActive() {
+  try {
+    const data = await getJson('/api/radiosondes?active_sec=' + ACTIVE_SONDE_MAX_AGE_SEC);
+    const sondes = Array.isArray(data.radiosondes) ? data.radiosondes : [];
+    for (const s of sondes) sondesCache.set(s.serial, s);
+    renderRadiosondesTable();
+  } catch (e) {
+
   }
 }
 
@@ -464,12 +497,11 @@ async function refreshAll() {
   if (activeTab === 'whitelist') setText('whitelistText', await getText('/api/whitelist'));
   if (activeTab === 'blacklist') setText('blacklistText', await getText('/api/blacklist'));
   if (activeTab === 'radiosondes') {
-    // This reads and parses every sonde log file on the server, so it's
-    // much heavier than the other tabs - don't hammer it every 500ms.
+
     const now = Date.now();
     if (now - lastRadiosondesRefresh >= 4000) {
       lastRadiosondesRefresh = now;
-      await refreshRadiosondes();
+      await refreshRadiosondesActive();
     }
   }
 }
@@ -480,6 +512,10 @@ async function action(cmd) {
   const r = await fetch('/api/' + cmd, { method: 'POST' });
   const t = await r.text();
   setText('statusText', t);
+  if (cmd === 'clearlogs') {
+    sondesCache = new Map();
+    renderRadiosondesTable();
+  }
   setTimeout(refreshAll, 700);
 }
 
@@ -489,7 +525,10 @@ function showTab(id, btn) {
   document.getElementById(id).classList.add('active');
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  if (id === 'radiosondes') lastRadiosondesRefresh = 0; // show fresh data right away on tab switch
+  if (id === 'radiosondes') {
+    lastRadiosondesRefresh = Date.now();
+    loadRadiosondesFull();
+  }
   refreshAll();
 }
 
@@ -757,6 +796,13 @@ document.getElementById('radarDialog')?.addEventListener('click', (e) => {
 document.querySelectorAll('[data-action]').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.action === 'radar') { openRadar(); return; }
+    if (btn.dataset.action === 'sonde-filter') {
+      radiosondesHours = parseInt(btn.dataset.hours, 10) || 0;
+      document.querySelectorAll('[data-action="sonde-filter"]').forEach(b => b.classList.toggle('active', b === btn));
+      lastRadiosondesRefresh = Date.now();
+      loadRadiosondesFull();
+      return;
+    }
     action(btn.dataset.action);
   });
 });
@@ -787,7 +833,10 @@ const SONDE_DETAIL_ROWS = [
   { label: 'Datetime / Position reference', render: d => joinParts([fmt1(d.ref_datetime), fmt1(d.ref_position)], ', ') },
   { label: 'First seen', render: d => fmt1(d.first_time) },
   { label: 'Last update', render: d => d.modified != null ? fmtUnixTime(d.modified) : null },
-  { label: 'Distance', render: d => d.distance_km != null ? fmtDistance(d.distance_km) : null },
+  { label: 'Distance / Bearing / Elevation', render: d => joinParts(
+      [d.distance_km != null ? fmtDistance(d.distance_km) : null,
+       d.bearing_deg != null ? Number(d.bearing_deg).toFixed(0) + '\u00b0 az' : null,
+       d.elevation_deg != null ? Number(d.elevation_deg).toFixed(1) + '\u00b0 el' : null], ', ') },
   { label: 'Latitude / Longitude', render: d => joinParts(
       [d.lat != null ? Number(d.lat).toFixed(5) + '\u00b0' : null,
        d.lon != null ? Number(d.lon).toFixed(5) + '\u00b0' : null], ', ') },
@@ -824,7 +873,7 @@ const SONDE_DETAIL_ROWS = [
 
 const SONDE_DETAIL_CONSUMED_KEYS = new Set([
   'serial', 'type', 'wsrx_frequency', 'encrypted', 'frame', 'datetime', 'ref_datetime', 'ref_position',
-  'first_time', 'modified', 'frames', 'distance_km', 'lat', 'lon', 'first_altitude', 'alt', 'altitude',
+  'first_time', 'modified', 'frames', 'distance_km', 'bearing_deg', 'elevation_deg', 'lat', 'lon', 'first_altitude', 'alt', 'altitude',
   'vel_h', 'heading', 'vel_v', 'sats', 'sat', 'temp', 'humidity', 'pressure', 'batt', 'rssi',
   'burstkilltimer', 'bt', 'killtimer', 'aux', 'rs41_mainboard', 'rs41_mainboard_fw',
 ]);
@@ -834,6 +883,8 @@ function openSondeDetail(serial) {
   if (!dialog || !serial) return;
   const title = document.getElementById('sondeDialogTitle');
   if (title) title.textContent = 'Radiosonde ' + serial;
+  const mapLink = document.getElementById('sondeMapLink');
+  if (mapLink) mapLink.href = 'https://www.wettersonde.net/map.php?sonde=' + encodeURIComponent(serial);
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
   loadSondeDetail(serial);
