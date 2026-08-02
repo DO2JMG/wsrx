@@ -1,7 +1,7 @@
 Version 0.1.04
  - Many changes to the web interface
  - Add radar in the webinterface
- - Add more information about a radionde
+ - Add more information about a radisonde
  - Add udp-out for aprsmap or udpgate4
    
 Version 0.1.03
