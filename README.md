@@ -155,6 +155,19 @@ cd ~/wsrx
 ./update.sh
 ```
 
+Automatically delete radiosondes that are older than 24 hours. Add a cronjob.
+
+```
+crontab -e
+```
+
+
+```
+0 * * * * find /home/<username>/wsrx/logs/sondes -name "*.json" -mtime +1 -delete
+```
+
+
+
 ## Installing KA9Q Radio
 
 KA9Q Radio is used as the SDR backend. The example below builds KA9Q from source and installs it system-wide.
