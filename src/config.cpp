@@ -177,6 +177,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_imet4 = iniBool(ini, "decoder.imet4", cfg.decoder_type_imet4);
     cfg.decoder_type_meisei = iniBool(ini, "decoder.meisei", cfg.decoder_type_meisei);
     cfg.decoder_type_c34c50 = iniBool(ini, "decoder.c34c50", cfg.decoder_type_c34c50);
+    cfg.decoder_type_dropsonde = iniBool(ini, "decoder.dropsonde", cfg.decoder_type_dropsonde);
 
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);

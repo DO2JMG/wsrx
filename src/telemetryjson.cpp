@@ -123,6 +123,13 @@ bool validTypeSerial(const TelemetryFrame& frame) {
         return std::regex_match(serial, s1_serial_re);
     }
 
+    if (type.find("RD94") != std::string::npos || type.find("RD41") != std::string::npos) {
+        // Dropsonde: the decoder pads the ID to 9 digits and reports
+        // "000000000" until it has actually locked its own serial - same
+        // check radiosonde_auto_rx uses, no other normalization needed.
+        return serial != "000000000";
+    }
+
     return true;
 }
 
