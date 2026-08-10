@@ -3,6 +3,7 @@ Version 0.1.04
  - Add radar in the webinterface
  - Add more information about a radisonde
  - Add udp-out for aprsmap or udpgate4
+ - Add dropsonde decoder
    
 Version 0.1.03
   - Fixed a bug in the scanner logic
