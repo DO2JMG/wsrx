@@ -1,6 +1,6 @@
 .RECIPEPREFIX := >
 
-PROGRAMS := rs41mod dfm09mod m10m20mod imet4iq meisei100mod c50iq windsondmod dft_detect
+PROGRAMS := rs41mod dfm09mod m10m20mod imet4iq meisei100mod c50iq windsondmod rd94rd41drop dft_detect
 
 LDLIBS := -lm
 CC := gcc
@@ -24,6 +24,9 @@ imet4iq: imet4iq.c
 >$(CC) $(CFLAGS) imet4iq.c -lm -o imet4iq
 
 windsondmod: windsondmod.o 
+
+rd94rd41drop: rd94rd41drop.c
+>$(CC) $(CFLAGS) rd94rd41drop.c -lm -o rd94rd41drop
 
 dft_detect: dft_detect.c
 >$(CC) -Ofast -march=native dft_detect.c -lm -o dft_detect
