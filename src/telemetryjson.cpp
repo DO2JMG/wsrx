@@ -142,9 +142,12 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     oss << '{';
     addString(oss, first, "timestamp", ts);
 
-    const int upload_frame = (frame.type.find("RS41") != std::string::npos)
-        ? (frame.frame >= 0 ? frame.frame : 0)
-        : 0;
+    // RS41 and RS92 report a real, monotonically increasing frame counter
+    // (rs41mod's/rs92mod's "frame" field); other decoders' frame numbers
+    // aren't meaningful/reliable enough to upload, so they stay at 0.
+    const bool has_reliable_frame_number =
+        frame.type.find("RS41") != std::string::npos || frame.type.find("RS92") != std::string::npos;
+    const int upload_frame = (has_reliable_frame_number && frame.frame >= 0) ? frame.frame : 0;
     addInt(oss, first, "frame", upload_frame);
     addNumberRaw(oss, first, "latitude", frame.lat);
     addNumberRaw(oss, first, "longitude", frame.lon);
