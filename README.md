@@ -33,6 +33,7 @@ What this software can do!
 | Manufacturer | Model              | Position | Temperature | Humidity | Pressure         |
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
 | Vaisala      | RS41-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
+| Vaisala      | RS92-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
 | Graw         | DFM09/17        | ✅       | ✅          | ❌       | ❌               |
 | Meteomodem   | M10                | ✅       | ✅          | ✅       | Not Sent         |
 | Meteomodem   | M20                | ✅       | ❌          | ❌       | Not Sent         |
