@@ -42,6 +42,7 @@ What this software can do!
 | Meisei       | iMS-100    | ✅       | ✅          | ✅       | ❌               |
 | Meteolabor   | SRS-C50      | ✅       | ✅          | ✅       | ❌               |
 | Windsond     | S1            | ✅       | ✅          | ✅       | ✅               |
+| Lockheed Martin | LMS6      | ✅       | ❌          | ❌       | ❌               |
 
 - The C50 has not been tested.
 - The Windsond S1 decoder is very experimental
