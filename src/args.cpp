@@ -85,6 +85,8 @@ void Args::printHelp(const char* program) {
               << "  -ka9q-pcm <name>\n"
               << "  -decoder-dir <path>      default: decoder next to wsrx executable\n"
               << "  -wav <file>              offline WAV test input\n"
+              << "  -rs92-ephemeris-file <file>  manual RS92 RINEX ephemeris override (skips auto-download)\n"
+              << "  -rs92-ephemeris-dir <dir>    cache dir for auto-downloaded RS92 ephemeris, default: ephemeris\n"
               << "  -sample-rate <Hz>        KA9Q/decoder sample rate, default 48000\n"
               << "  -ka9q-low <Hz>           KA9Q channel low edge, default -20000\n"
               << "  -ka9q-high <Hz>          KA9Q channel high edge, default 20000\n"

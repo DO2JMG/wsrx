@@ -166,6 +166,8 @@ Config Config::load(const Args& args, const std::string& config_file) {
 
     cfg.decoder_dir = iniGet(ini, "decoder.decoder_dir", cfg.decoder_dir);
     cfg.wav_file = iniGet(ini, "decoder.wav_file", cfg.wav_file);
+    cfg.rs92_ephemeris_file = iniGet(ini, "decoder.rs92_ephemeris_file", cfg.rs92_ephemeris_file);
+    cfg.rs92_ephemeris_dir = iniGet(ini, "decoder.rs92_ephemeris_dir", cfg.rs92_ephemeris_dir);
     cfg.sample_rate = iniInt(ini, "decoder.sample_rate", cfg.sample_rate);
     cfg.ka9q_low_hz = iniInt(ini, "decoder.ka9q_low_hz", cfg.ka9q_low_hz);
     cfg.ka9q_high_hz = iniInt(ini, "decoder.ka9q_high_hz", cfg.ka9q_high_hz);
@@ -178,6 +180,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_meisei = iniBool(ini, "decoder.meisei", cfg.decoder_type_meisei);
     cfg.decoder_type_c34c50 = iniBool(ini, "decoder.c34c50", cfg.decoder_type_c34c50);
     cfg.decoder_type_dropsonde = iniBool(ini, "decoder.dropsonde", cfg.decoder_type_dropsonde);
+    cfg.decoder_type_rs92 = iniBool(ini, "decoder.rs92", cfg.decoder_type_rs92);
 
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);
@@ -229,6 +232,8 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_pcm = args.get("ka9q-pcm", cfg.ka9q_pcm);
     cfg.decoder_dir = args.get("decoder-dir", cfg.decoder_dir);
     cfg.wav_file = args.get("wav", cfg.wav_file);
+    cfg.rs92_ephemeris_file = args.get("rs92-ephemeris-file", cfg.rs92_ephemeris_file);
+    cfg.rs92_ephemeris_dir = args.get("rs92-ephemeris-dir", cfg.rs92_ephemeris_dir);
 
     cfg.sample_rate = args.getInt("sample-rate", cfg.sample_rate);
     cfg.ka9q_low_hz = args.getInt("ka9q-low", cfg.ka9q_low_hz);
@@ -284,6 +289,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     if (cfg.callsign.empty()) {
         throw std::runtime_error("Missing callsign. Set station.callsign in config.ini or use -callsign.");
     }
+
     if (cfg.scan_enabled) {
         if (cfg.scan_min_mhz <= 0.0 || cfg.scan_max_mhz <= cfg.scan_min_mhz) {
             throw std::runtime_error("Invalid scan range. Set scan.min_mhz and scan.max_mhz in config.ini.");

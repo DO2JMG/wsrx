@@ -341,6 +341,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         else if (line.find("M10") != std::string::npos) f.type = "M10";
         else if (line.find("M20") != std::string::npos) f.type = "M20";
         else if (line.find("iMet") != std::string::npos || line.find("IMET") != std::string::npos) f.type = "IMET";
+        else if (line.find("RS92") != std::string::npos) f.type = "RS92";
     }
 
     if (f.serial.empty() || std::isnan(f.lat) || std::isnan(f.lon) || std::isnan(f.alt_m)) {
