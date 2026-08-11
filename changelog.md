@@ -4,6 +4,7 @@ Version 0.1.04
  - Add more information about a radisonde
  - Add udp-out for aprsmap or udpgate4
  - Add dropsonde decoder
+ - Add rs92 decoder
    
 Version 0.1.03
   - Fixed a bug in the scanner logic
