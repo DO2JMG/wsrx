@@ -34,6 +34,7 @@ What this software can do!
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
 | Vaisala      | RS41-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
 | Vaisala      | RS92-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
+| Vaisala      | RD41/RD94      | ✅       | ✅          | ✅       | ✅    |
 | Graw         | DFM09/17        | ✅       | ✅          | ❌       | ❌               |
 | Meteomodem   | M10                | ✅       | ✅          | ✅       | Not Sent         |
 | Meteomodem   | M20                | ✅       | ❌          | ❌       | Not Sent         |
