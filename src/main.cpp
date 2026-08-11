@@ -39,7 +39,7 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.04";
+static constexpr const char* APP_VERSION = "0.1.03";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -305,6 +305,7 @@ static std::string normalizeDecoderName(const std::string& decoder) {
     if (d.find("c34c50") != std::string::npos) return "c34c50";
     if (d.find("s1") != std::string::npos) return "s1";
     if (d.find("rs92") != std::string::npos) return "rs92";
+    if (d.find("lms6") != std::string::npos) return "lms6";
     if (d.find("rd94") != std::string::npos || d.find("rd41") != std::string::npos ||
         d.find("dropsonde") != std::string::npos) return "dropsonde";
     return d;
@@ -320,6 +321,7 @@ static std::string decoderLabel(const std::string& decoder) {
     if (d == "meisei") return "IMS100";
     if (d == "c34c50") return "c34c50";
     if (d == "rs92") return "RS92";
+    if (d == "lms6") return "LMS6";
     if (d == "s1") return "S1";
     if (d == "dropsonde") return "RD94RD41";
     return decoder;
@@ -329,6 +331,7 @@ static void validateRequiredDecoderFiles(const Config& cfg) {
     const std::vector<std::string> required = {
         "rs41mod",
         "rs92mod",
+        "lms6Xmod",
         "dfm09mod",
         "m10m20mod",
         "imet4iq",
@@ -356,6 +359,7 @@ static std::string decoderCommandPath(const Config& cfg, const std::string& deco
     std::string d = normalizeDecoderName(decoder);
     if (d == "rs41") return joinPath(cfg.decoder_dir, "rs41mod");
     if (d == "rs92") return joinPath(cfg.decoder_dir, "rs92mod");
+    if (d == "lms6") return joinPath(cfg.decoder_dir, "lms6Xmod");
     if (d == "dfm") return joinPath(cfg.decoder_dir, "dfm09mod");
     if (d == "m10") return joinPath(cfg.decoder_dir, "m10m20mod");
     if (d == "m20") return joinPath(cfg.decoder_dir, "m10m20mod");
@@ -376,6 +380,7 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
                 " --IQ {iq_offset} - {sample_rate} 16",
             cfg);
     }
+    if (d == "lms6") return expandDecoderArgs("--json --vit2 --lpIQ --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "dfm") return expandDecoderArgs("-i -vv --ecc --json --dist --ptu --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "m10") return expandDecoderArgs("-vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
     if (d == "m20") return expandDecoderArgs(" -vv --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
@@ -1024,6 +1029,7 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     std::vector<std::string> types;
     if (cfg.decoder_type_rs41) types.push_back("RS41");
     if (cfg.decoder_type_rs92) types.push_back("RS92");
+    if (cfg.decoder_type_lms6) types.push_back("LMS6");
     if (cfg.decoder_type_dfm9) types.push_back("DFM9");
     if (cfg.decoder_type_m10) types.push_back("M10");
     if (cfg.decoder_type_imet4) types.push_back("IMET4");
@@ -1033,7 +1039,7 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
-        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92"};
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92", "LMS6"};
     }
 
     std::string out;
@@ -1421,7 +1427,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
             if (det) {
                 ++detections;
                 const std::string decoder_name = normalizeDecoderName(det->sonde_type);
-                if (decoder_name != "rs41" && decoder_name != "rs92" && decoder_name != "dfm" && decoder_name != "m10" &&
+                if (decoder_name != "rs41" && decoder_name != "rs92" && decoder_name != "lms6" && decoder_name != "dfm" && decoder_name != "m10" &&
                     decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei" &&
                     decoder_name != "s1" && decoder_name != "dropsonde") {
                     std::ostringstream unsupported;

@@ -212,6 +212,30 @@ std::string normalizeSRSC50(const std::string& serial) {
     return "C50" + hex_suffix;
 }
 
+std::string normalizeLMS6Serial(const std::string& serial) {
+    const auto dash = serial.find('-');
+    if (dash == std::string::npos || dash + 1 >= serial.size()) return serial;
+
+    const std::string segment = serial.substr(dash + 1);
+    for (unsigned char c : segment) {
+        if (!std::isdigit(c)) return serial;
+    }
+
+    unsigned long id_val = 0;
+    try {
+        id_val = std::stoul(segment);
+    } catch (const std::exception&) {
+        return serial;
+    }
+
+    std::string hex_suffix = padHex(id_val, 1);
+    if (hex_suffix.size() > 5) {
+        hex_suffix = hex_suffix.substr(hex_suffix.size() - 5);
+    }
+
+    return "LMS6" + hex_suffix;
+}
+
 std::string normalizeImet(const std::string& serial, int frame, const std::string& hhmmss) {
     if (frame >= 0) {
         const int seconds_of_day = secondsOfDayFromHhmmss(hhmmss);
@@ -274,7 +298,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         const std::string upper_type_for_subtype = upperCopy(f.type);
         if (upper_type_for_subtype.find("RS41") != std::string::npos
             || upper_type_for_subtype.find("DFM") != std::string::npos
-            || upper_type_for_subtype.find("RS92") != std::string::npos) {
+            || upper_type_for_subtype.find("RS92") != std::string::npos
+            || upper_type_for_subtype.find("LMS") != std::string::npos) {
             f.type = normalizeDFM(*subtype);
         }
     }
@@ -343,6 +368,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         else if (line.find("M20") != std::string::npos) f.type = "M20";
         else if (line.find("iMet") != std::string::npos || line.find("IMET") != std::string::npos) f.type = "IMET";
         else if (line.find("RS92") != std::string::npos) f.type = "RS92";
+        else if (line.find("LMS") != std::string::npos) f.type = "LMS";
     }
 
     if (f.serial.empty() || std::isnan(f.lat) || std::isnan(f.lon) || std::isnan(f.alt_m)) {
@@ -369,6 +395,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         f.serial = normalizeMeisei(f.serial);
     } else if (normalized_type_upper.find("C50") != std::string::npos) {
         f.serial = normalizeSRSC50(f.serial);
+    } else if (normalized_type_upper.find("LMS") != std::string::npos) {
+        f.serial = normalizeLMS6Serial(f.serial);
     } else {
         f.serial = normalizeDFMSerial(f.serial, f.type);
     }
@@ -407,3 +435,4 @@ std::optional<std::string> TelemetryParser::extractString(const std::string& tex
 
     return std::nullopt;
 }
+

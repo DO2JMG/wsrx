@@ -181,6 +181,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_c34c50 = iniBool(ini, "decoder.c34c50", cfg.decoder_type_c34c50);
     cfg.decoder_type_dropsonde = iniBool(ini, "decoder.dropsonde", cfg.decoder_type_dropsonde);
     cfg.decoder_type_rs92 = iniBool(ini, "decoder.rs92", cfg.decoder_type_rs92);
+    cfg.decoder_type_lms6 = iniBool(ini, "decoder.lms6", cfg.decoder_type_lms6);
 
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);

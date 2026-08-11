@@ -56,6 +56,7 @@ struct Config {
     bool decoder_type_c34c50 = true;
     bool decoder_type_dropsonde = true;
     bool decoder_type_rs92 = true;
+    bool decoder_type_lms6 = true;
 
     bool scan_enabled = true;
     double scan_min_mhz = 400.0;

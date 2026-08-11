@@ -118,15 +118,17 @@ bool validTypeSerial(const TelemetryFrame& frame) {
         return std::regex_match(serial, c50_serial_re);
     }
 
+    if (type.find("LMS") != std::string::npos) {
+        static const std::regex lms6_serial_re(R"(^LMS6[0-9A-F]{5}$)");
+        return std::regex_match(serial, lms6_serial_re);
+    }
+
     if (type == "S1") {
         static const std::regex s1_serial_re(R"(^S1-s?[0-9]+$)");
         return std::regex_match(serial, s1_serial_re);
     }
 
     if (type.find("RD94") != std::string::npos || type.find("RD41") != std::string::npos) {
-        // Dropsonde: the decoder pads the ID to 9 digits and reports
-        // "000000000" until it has actually locked its own serial - same
-        // check radiosonde_auto_rx uses, no other normalization needed.
         return serial != "000000000";
     }
 
@@ -142,11 +144,9 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     oss << '{';
     addString(oss, first, "timestamp", ts);
 
-    // RS41 and RS92 report a real, monotonically increasing frame counter
-    // (rs41mod's/rs92mod's "frame" field); other decoders' frame numbers
-    // aren't meaningful/reliable enough to upload, so they stay at 0.
-    const bool has_reliable_frame_number =
-        frame.type.find("RS41") != std::string::npos || frame.type.find("RS92") != std::string::npos;
+    const bool has_reliable_frame_number = frame.type.find("RS41") != std::string::npos ||
+                                            frame.type.find("RS92") != std::string::npos ||
+                                            frame.type.find("LMS") != std::string::npos;
     const int upload_frame = (has_reliable_frame_number && frame.frame >= 0) ? frame.frame : 0;
     addInt(oss, first, "frame", upload_frame);
     addNumberRaw(oss, first, "latitude", frame.lat);

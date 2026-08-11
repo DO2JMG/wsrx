@@ -53,10 +53,12 @@ std::string pad(int value, int width) {
     return oss.str();
 }
 
+// Classic RINEX-2 daily GPS broadcast ephemeris filename, e.g. "brdc0430.26n".
 std::string rnxFileName(const YearDay& yd) {
     return "brdc" + pad(yd.doy, 3) + "0." + pad(yd.yy, 2) + "n";
 }
 
+// Runs a shell command, discarding stdout/stderr. Returns true on exit code 0.
 bool runQuiet(const std::string& cmd) {
     std::string full = cmd + " >/dev/null 2>&1";
     return std::system(full.c_str()) == 0;
@@ -66,6 +68,8 @@ bool commandExists(const std::string& name) {
     return runQuiet("command -v " + shellQuote(name));
 }
 
+// Runs a shell command, capturing combined stdout+stderr into `output`.
+// Returns true on exit code 0.
 bool runCapture(const std::string& cmd, std::string& output) {
     output.clear();
     char tmpl[] = "/tmp/wsrx-rs92eph-XXXXXX";
@@ -88,6 +92,7 @@ bool runCapture(const std::string& cmd, std::string& output) {
     std::remove(tmpl);
     return rc == 0;
 }
+
 bool looksLikeRinex2GpsNav(const std::string& path) {
     std::ifstream in(path);
     if (!in) return false;
@@ -111,6 +116,7 @@ bool tryDownload(const YearDay& yd, const std::string& rnx_name, const std::stri
                   bool verbose) {
     const std::string yyyy = std::to_string(yd.year);
     const std::string ddd = pad(yd.doy, 3);
+
     const std::vector<std::string> compressed_names = {rnx_name + ".gz", rnx_name + ".Z"};
 
     const std::string tmp_decompressed = dest_dir + "/." + rnx_name;
