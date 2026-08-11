@@ -32,7 +32,7 @@ What this software can do!
 
 | Manufacturer | Model              | Position | Temperature | Humidity | Pressure         |
 |--------------|--------------------|:--------:|:-----------:|:--------:|:-----------------|
-| Vaisala      | RS41-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
+| Vaisala      | RS41-SG/SGP SGPE/SGE     | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
 | Vaisala      | RS92-SG/SGP      | ✅       | ✅          | ✅       | ✅ (for -SGP)    |
 | Vaisala      | RD41/RD94      | ✅       | ✅          | ✅       | ✅    |
 | Graw         | DFM09/17        | ✅       | ✅          | ❌       | ❌               |
