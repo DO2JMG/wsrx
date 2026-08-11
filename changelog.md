@@ -5,6 +5,7 @@ Version 0.1.04
  - Add udp-out for aprsmap or udpgate4
  - Add dropsonde decoder
  - Add rs92 decoder
+ - Add lms6 decoder
    
 Version 0.1.03
   - Fixed a bug in the scanner logic
