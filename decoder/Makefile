@@ -1,6 +1,6 @@
 .RECIPEPREFIX := >
 
-PROGRAMS := rs41mod dfm09mod m10m20mod imet4iq meisei100mod c50iq windsondmod rd94rd41drop dft_detect
+PROGRAMS := rs41mod dfm09mod m10m20mod imet4iq meisei100mod c50iq windsondmod rd94rd41drop rs92mod dft_detect
 
 LDLIBS := -lm
 CC := gcc
@@ -15,6 +15,8 @@ rs41mod: rs41mod.o demod_mod.o bch_ecc_mod.o
 dfm09mod: dfm09mod.o demod_mod.o
 
 m10m20mod: m10m20mod.o demod_mod.o
+
+rs92mod: rs92mod.o demod_mod.o bch_ecc_mod.o 
 
 c50iq: c50iq.o demod_mod.o
 
