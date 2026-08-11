@@ -53,12 +53,10 @@ std::string pad(int value, int width) {
     return oss.str();
 }
 
-// Classic RINEX-2 daily GPS broadcast ephemeris filename, e.g. "brdc0430.26n".
 std::string rnxFileName(const YearDay& yd) {
     return "brdc" + pad(yd.doy, 3) + "0." + pad(yd.yy, 2) + "n";
 }
 
-// Runs a shell command, discarding stdout/stderr. Returns true on exit code 0.
 bool runQuiet(const std::string& cmd) {
     std::string full = cmd + " >/dev/null 2>&1";
     return std::system(full.c_str()) == 0;
@@ -68,8 +66,6 @@ bool commandExists(const std::string& name) {
     return runQuiet("command -v " + shellQuote(name));
 }
 
-// Runs a shell command, capturing combined stdout+stderr into `output`.
-// Returns true on exit code 0.
 bool runCapture(const std::string& cmd, std::string& output) {
     output.clear();
     char tmpl[] = "/tmp/wsrx-rs92eph-XXXXXX";
@@ -92,12 +88,6 @@ bool runCapture(const std::string& cmd, std::string& output) {
     std::remove(tmpl);
     return rc == 0;
 }
-
-// Sanity-checks that a decompressed file actually looks like a RINEX-2 GPS
-// navigation (broadcast ephemeris) file -- the only format rs92mod's
-// read_RNXpephs() parser understands. Guards against accidentally picking
-// up a RINEX-3 mixed/multi-GNSS nav file (different header, different
-// fixed-column layout) from a misconfigured or changed mirror path.
 bool looksLikeRinex2GpsNav(const std::string& path) {
     std::ifstream in(path);
     if (!in) return false;
@@ -117,26 +107,12 @@ bool looksLikeRinex2GpsNav(const std::string& path) {
     return true;
 }
 
-// Tries to download the compressed RINEX file for one (year, day) from one
-// mirror into dest_dir, decompressed to its final "brdcDDD0.YYn" name.
-// Returns true on success.
 bool tryDownload(const YearDay& yd, const std::string& rnx_name, const std::string& dest_dir, Logger& log,
                   bool verbose) {
     const std::string yyyy = std::to_string(yd.year);
     const std::string ddd = pad(yd.doy, 3);
-
-    // ESA's anonymous FTP mirror is kept up to date per-day and needs no
-    // login. Its actual compression suffix has changed over time (legacy
-    // ".Z" LZW-compress vs. current ".gz"), so both are tried. There is
-    // deliberately no BKG/other fallback here: BKG's equivalent path only
-    // publishes RINEX-3 mixed multi-GNSS nav files, which are a different,
-    // incompatible format for rs92mod's RINEX-2-only parser (verified by
-    // inspecting the actual directory listing -- see the .gz check below
-    // for the safety net if a mirror's format ever changes again).
     const std::vector<std::string> compressed_names = {rnx_name + ".gz", rnx_name + ".Z"};
 
-    // What `uncompress -f` produces / what we decompress to: same name,
-    // no compression suffix.
     const std::string tmp_decompressed = dest_dir + "/." + rnx_name;
     const std::string dest_path = dest_dir + "/" + rnx_name;
 
@@ -158,8 +134,6 @@ bool tryDownload(const YearDay& yd, const std::string& rnx_name, const std::stri
             continue;
         }
 
-        // Try the decompressor matching the actual suffix first, then the
-        // others as a fallback (gzip can also decompress classic .Z).
         bool decompressed = false;
         if (compressed_name.size() > 3 && compressed_name.substr(compressed_name.size() - 3) == ".gz") {
             decompressed = runQuiet("gzip -dc " + shellQuote(tmp_compressed) + " > " + shellQuote(tmp_decompressed)) &&
@@ -210,8 +184,6 @@ bool tryDownload(const YearDay& yd, const std::string& rnx_name, const std::stri
     return false;
 }
 
-// Best-effort fallback: most recently modified "brdc*n" file already
-// present in dest_dir, regardless of which day it is for.
 std::string mostRecentCachedFile(const std::string& dest_dir) {
     std::error_code ec;
     std::string best_path;
@@ -275,8 +247,6 @@ std::string ensure(const Config& cfg, Logger& log) {
         return mostRecentCachedFile(dir);
     }
 
-    // The current UTC day's combined daily file is sometimes not published
-    // yet (especially early in the day), so fall back to the previous day.
     for (int days_back : {0, 1}) {
         const YearDay yd = utcDateMinusDays(days_back);
         const std::string name = rnxFileName(yd);
