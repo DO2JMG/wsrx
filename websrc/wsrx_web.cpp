@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <mutex>
 #include <optional>
@@ -118,6 +119,22 @@ static std::string read_file_full(const std::string &path, size_t max_bytes = 10
     return ss.str();
 }
 
+static std::mutex g_file_write_mutex;
+
+static bool write_file_atomic(const std::string &path, const std::string &content) {
+    std::lock_guard<std::mutex> lock(g_file_write_mutex);
+    std::error_code ec;
+    std::filesystem::create_directories(dirname_of(path), ec);
+    std::string tmp = path + ".tmp";
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    out.close();
+    if (!out) return false;
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) return false;
+    return true;
+}
+
 static std::string shell_quote(const std::string &s) {
     std::string out = "'";
     for (char c : s) {
@@ -143,6 +160,15 @@ static std::string run_cmd(const std::string &cmd, int *exit_code = nullptr) {
         else *exit_code = rc;
     }
     return data;
+}
+
+static std::atomic<bool> g_update_running{false};
+
+static bool run_detached_to_log(const std::string &cmd, const std::string &log_path) {
+    std::error_code ec;
+    std::filesystem::create_directories(dirname_of(log_path), ec);
+    std::string full = cmd + " > " + shell_quote(log_path) + " 2>&1 < /dev/null &";
+    return std::system(full.c_str()) == 0;
 }
 
 static std::string json_escape(const std::string &s) {
@@ -229,6 +255,8 @@ struct App {
     std::string sondes_dir;
     std::string cpu_file;
     std::string version_file;
+    std::string update_script;
+    std::string update_log;
     std::string web_auth_user;
     std::string web_auth_pass;
     double station_lat = std::numeric_limits<double>::quiet_NaN();
@@ -472,9 +500,6 @@ static void append_utf8(std::string &out, unsigned int cp) {
     }
 }
 
-// Tries to read a \uXXXX escape starting at line[p] == '\\'. On success,
-// returns the code point and advances p past the whole escape (to the
-// last character consumed); on failure, p is left unchanged.
 static std::optional<unsigned int> read_unicode_escape(const std::string &line, size_t &p) {
     if (p + 5 >= line.size() || line[p] != '\\' || line[p + 1] != 'u') return std::nullopt;
     int h0 = hex_val(line[p + 2]), h1 = hex_val(line[p + 3]), h2 = hex_val(line[p + 4]), h3 = hex_val(line[p + 5]);
@@ -888,12 +913,54 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
     return js.str();
 }
 
-static void handle_client(int fd, const App &app) {
+static const size_t kMaxRequestBytes = 4 * 1024 * 1024;
+
+static bool read_full_request(int fd, std::string &out) {
     char buf[8192];
-    ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
-    if (n <= 0) { close(fd); return; }
-    buf[n] = '\0';
-    std::string request_str(buf, static_cast<size_t>(n));
+    size_t header_end = std::string::npos;
+    while (header_end == std::string::npos) {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) return false;
+        out.append(buf, static_cast<size_t>(n));
+        if (out.size() > kMaxRequestBytes) return false;
+        header_end = out.find("\r\n\r\n");
+    }
+
+    long long content_length = 0;
+    std::string cl = get_header(out, "Content-Length");
+    if (!cl.empty()) {
+        try { content_length = std::stoll(cl); } catch (...) { content_length = 0; }
+    }
+    if (content_length < 0) content_length = 0;
+    if (static_cast<size_t>(content_length) > kMaxRequestBytes) return false;
+
+    size_t body_start = header_end + 4;
+    while (out.size() - body_start < static_cast<size_t>(content_length)) {
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) break; // client hung up early; handle whatever we got
+        out.append(buf, static_cast<size_t>(n));
+        if (out.size() > kMaxRequestBytes) return false;
+    }
+    return true;
+}
+
+static std::string request_body(const std::string &request) {
+    size_t pos = request.find("\r\n\r\n");
+    if (pos == std::string::npos) return "";
+    std::string body = request.substr(pos + 4);
+    std::string cl = get_header(request, "Content-Length");
+    if (!cl.empty()) {
+        try {
+            size_t len = static_cast<size_t>(std::stoll(cl));
+            if (len <= body.size()) body.resize(len);
+        } catch (...) {}
+    }
+    return body;
+}
+
+static void handle_client(int fd, const App &app) {
+    std::string request_str;
+    if (!read_full_request(fd, request_str)) { close(fd); return; }
 
     if (!check_auth(app, request_str)) {
         send_unauthorized(fd);
@@ -901,7 +968,7 @@ static void handle_client(int fd, const App &app) {
         return;
     }
 
-    std::istringstream req(buf);
+    std::istringstream req(request_str);
     std::string method, target, version;
     req >> method >> target >> version;
     std::string path = target;
@@ -939,15 +1006,44 @@ static void handle_client(int fd, const App &app) {
         if (qm.count("lines")) lines = std::max(1, std::min(2000, atoi(qm["lines"].c_str())));
         send_response(fd, 200, "text/plain", tail_lines(read_file(app.log_file, 1024 * 1024), lines));
     } else if (path == "/api/config") {
-        send_response(fd, 200, "text/plain", read_file(app.config_file, 256 * 1024));
+        if (method == "POST") {
+            std::string body = request_body(request_str);
+            if (body.size() > 512 * 1024) {
+                send_response(fd, 413, "text/plain", "config.ini too large (max 512 KB)\n");
+            } else if (write_file_atomic(app.config_file, body)) {
+                send_response(fd, 200, "text/plain", "OK\n");
+            } else {
+                send_response(fd, 500, "text/plain", "failed to write config.ini\n");
+            }
+        } else {
+            send_response(fd, 200, "text/plain", read_file(app.config_file, 256 * 1024));
+        }
     } else if (path == "/api/whitelist") {
-        std::string t = read_file(app.whitelist_file, 256 * 1024);
-        if (t.empty() && !file_exists(app.whitelist_file)) t = app.whitelist_file + " not found\n";
-        send_response(fd, 200, "text/plain", t);
+        if (method == "POST") {
+            std::string body = request_body(request_str);
+            if (body.size() > 512 * 1024) {
+                send_response(fd, 413, "text/plain", "whitelist too large (max 512 KB)\n");
+            } else if (write_file_atomic(app.whitelist_file, body)) {
+                send_response(fd, 200, "text/plain", "OK\n");
+            } else {
+                send_response(fd, 500, "text/plain", "failed to write whitelist\n");
+            }
+        } else {
+            send_response(fd, 200, "text/plain", read_file(app.whitelist_file, 256 * 1024));
+        }
     } else if (path == "/api/blacklist") {
-        std::string t = read_file(app.blacklist_file, 256 * 1024);
-        if (t.empty() && !file_exists(app.blacklist_file)) t = app.blacklist_file + " not found\n";
-        send_response(fd, 200, "text/plain", t);
+        if (method == "POST") {
+            std::string body = request_body(request_str);
+            if (body.size() > 512 * 1024) {
+                send_response(fd, 413, "text/plain", "blacklist too large (max 512 KB)\n");
+            } else if (write_file_atomic(app.blacklist_file, body)) {
+                send_response(fd, 200, "text/plain", "OK\n");
+            } else {
+                send_response(fd, 500, "text/plain", "failed to write blacklist\n");
+            }
+        } else {
+            send_response(fd, 200, "text/plain", read_file(app.blacklist_file, 256 * 1024));
+        }
     } else if (path == "/api/spectrum") {
         std::string t = read_file(app.spectrum_file, 2 * 1024 * 1024);
         if (t.empty() && !file_exists(app.spectrum_file)) {
@@ -1013,6 +1109,35 @@ static void handle_client(int fd, const App &app) {
             std::string out = run_cmd(shell_quote(app.script) + " " + action + " wsrx", &rc);
             send_response(fd, rc == 0 ? 200 : 500, "text/plain", out);
         }
+    } else if (path == "/api/update") {
+        if (method != "POST") {
+            send_response(fd, 405, "text/plain", "POST required\n");
+        } else if (!file_exists(app.update_script)) {
+            send_response(fd, 404, "text/plain", "update.sh not found in " + app.base_dir + "\n");
+        } else if (g_update_running.exchange(true)) {
+            send_response(fd, 409, "text/plain", "An update is already running.\n");
+        } else {
+            bool launched = run_detached_to_log(shell_quote(app.update_script), app.update_log);
+            if (!launched) {
+                g_update_running = false;
+                send_response(fd, 500, "text/plain", "failed to start update.sh\n");
+            } else {
+                send_response(fd, 200, "text/plain",
+                    "Update started in the background.\n"
+                    "update.sh stops wsrx AND this web interface, pulls, rebuilds, then restarts both - "
+                    "so this page will go quiet for a bit and then pick back up on its own once it's done. "
+                    "No need to reload. This can take a few minutes.\n"
+                    "If the rebuild fails, wsrx and the web interface stay stopped until you fix it "
+                    "and run ./wsrx.sh start by hand.\n");
+            }
+        }
+    } else if (path == "/api/updatelog") {
+        int lines = 400;
+        auto qm = parse_query(query);
+        if (qm.count("lines")) lines = std::max(1, std::min(5000, atoi(qm["lines"].c_str())));
+        std::string t = read_file(app.update_log, 1024 * 1024);
+        if (t.empty() && !file_exists(app.update_log)) t = "No update has been run yet.\n";
+        send_response(fd, 200, "text/plain", tail_lines(t, lines));
     } else {
         send_response(fd, 404, "text/plain", "not found\n");
     }
@@ -1061,6 +1186,8 @@ int main(int argc, char **argv) {
     app.sondes_dir = app.base_dir + "/logs/sondes";
     app.cpu_file = app.base_dir + "/data/cpu_load.json";
     app.version_file = app.base_dir + "/data/version.json";
+    app.update_script = app.base_dir + "/update.sh";
+    app.update_log = app.base_dir + "/logs/update.log";
 
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) { perror("socket"); return 1; }
@@ -1107,4 +1234,3 @@ int main(int argc, char **argv) {
     close(s);
     return 0;
 }
-
