@@ -43,6 +43,10 @@ What this software can do!
 | Meteolabor   | SRS-C50      | ✅       | ✅          | ✅       | ❌               |
 | Windsond     | S1            | ✅       | ✅          | ✅       | ✅               |
 | Lockheed Martin | LMS6      | ✅       | ❌          | ❌       | ❌               |
+| Meteo-Radiy | MP3-H1 (MRZ-N1) | ✅ | ✅ | ✅ | Not Sent |
+| Meteosis | MTS01 | ✅ | ✅ | Not Sent | Not Sent |
+| Aerospace Newsky | CF-06-AH | ✅ | Not Sent | Not Sent | Not Sent |
+| Huayuntianyi | HT03G-1U (GTH3) | ✅ | ✅ | ✅ | ✅ |
 
 - The C50 has not been tested.
 - The Windsond S1 decoder is very experimental
