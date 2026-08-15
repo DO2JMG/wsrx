@@ -17,14 +17,9 @@
 
 #ifdef HAVE_FFTW3
 #include <fftw3.h>
-// Forward DFT plan; built once N_DFT is known.
+
 static fftwf_plan dft_fwd_plan = NULL;
-// Buffers passed to fftwf_execute_dft() must be at least as aligned as the
-// buffers used at plan time. Plain calloc() only guarantees 8 bytes on some
-// 32-bit platforms, below FFTW's 16-byte SIMD requirement, so we route the
-// complex buffers used by dft_raw() through fftwf_alloc_complex/fftwf_free.
-// FFTW_UNALIGNED would also work but disables SIMD and roughly halves the
-// speedup.
+
 #define ALLOC_DFT_COMPLEX(n) ((float complex *)fftwf_alloc_complex(n))
 #define FREE_DFT_COMPLEX(p)  fftwf_free(p)
 #else
@@ -43,8 +38,8 @@ typedef short i16_t;
 typedef int   i32_t;
 
 
-static int option_verbose = 0,  // ausfuehrliche Anzeige
-           option_inv = 0,      // invertiert Signal
+static int option_verbose = 0,  
+           option_inv = 0,      
            option_min = 0,
            option_iq = 0,
            option_dc = 0,
@@ -54,7 +49,7 @@ static int option_verbose = 0,  // ausfuehrliche Anzeige
            option_pcmraw = 0,
            option_singleLpIQ = 0,
            wavloaded = 0;
-static int wav_channel = 0;     // audio channel: left
+static int wav_channel = 0;    
 
 
 //int  dfm_sps = 2500;
@@ -83,13 +78,7 @@ static char mk2a_header[] = "0010100111""0010100111""0001001001""0010010101";
 //int  m10_sps = 9600;
 static char m10_header[] = //"10011001100110010100110010011001";
                                  "1001100110010100110010011001""1010"; // ofs=4/2 in frm_M10()
-// frame byte[0..1]: byte[0]=framelen-1, byte[1]=type(8F=M2K2,9F=M10,AF=M10+,20=M20)
-// M2K2   : 64 8F : 01100100 10001111
-// M10    : 64 9F : 01100100 10011111  (framelen 0x64+1) (baud=9616)
-// M10    : 66 9F : 01100110 10011111  (framelen 0x66+1) (baud=9600) (2025)
-// M10-aux: 76 9F : 01110110 10011111  (framelen 0x76+1)
-// M10+   : 64 AF : 01100100 10101111  (w/ gtop-GPS)
-// M20    : 45 20 : 01000101 00100000  (framelen 0x45+1) (baud=9600)
+
 
 //int  meisei_sps = 2400;   // 0xFB6230 =
 static char meisei_header[] = "110011001101001101001101010100101010110010101010"; // 11111011 01100010 00110000
@@ -148,11 +137,6 @@ static char wxr2pn9_header[] =
     "11000001""10010100"; //"11000001";  // C1 94 C1
 
 
-// Windsond S1 (Sparv Embedded), 2400 baud, NRZ-FSK
-// 20-bit syncword 0x5552D (see windsondmod.c: S1_SYNCWORD), MSB first as transmitted.
-// No fixed preamble is decoded by windsondmod (bit-sync is done via zero-crossing
-// PLL), so only the syncword itself is used here; herrs/thres may need retuning
-// once real-world captures are available.
 static char windsond_header[] = "01010101010100101101"; // 0x5552D
 
 
@@ -251,27 +235,6 @@ static int reset_d2() {
     return 0;
 }
 
-
-/*
-// m10-false-positive:
-// m10-preamble similar to rs41-preamble, parts of rs92/imet1ab, imet1ab; diffs:
-// - iq: - modulation-index rs41 < rs92 < m10,
-//       - power level / frame < 1s, noise
-// - fm: - frame duration <-> noise (variance/standard deviation)
-//       - pulse-shaping
-//           m10: 00110011 at 9600 sps
-//           rs41: 0 1 0 1 at 4800 sps
-// - after header, m10-baudrate < rs41-baudrate
-// - m10 top-carrier, fm-mean/average
-// - m10-header ..110(1)0110011()011.. bit shuffle
-// - m10 frame byte[1]=type(M2K2,M10,M10+)
-*/
-
-/*
-// rs92
-// imet1ab-false-positive
-// ...
-*/
 
 #define FM_GAIN (0.8)
 
