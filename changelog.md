@@ -1,4 +1,4 @@
-Version 0.1.04
+Version 0.1.05
 - The config.ini, blacklist.txt, and whitelist.txt files can be edited via the web interface
 - Several changes to the web interface
 - Add update button to the web interface
