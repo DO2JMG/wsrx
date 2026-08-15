@@ -161,14 +161,6 @@ std::string buildStationBeacon(const AprsConfig& cfg) {
     std::ostringstream body;
     body << "!" << formatLatMinutes(cfg.station_lat) << firstChar(cfg.station_symbol_table, '/')
          << formatLonMinutes(cfg.station_lon) << firstChar(cfg.station_symbol_code, '-');
-
-    /*
-    if (cfg.station_alt_m > 0.5) {
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "/A=%06u", realcard(cfg.station_alt_m * (1.0 / 0.3048)));
-        body << buf;
-    }
-    */
     
     body << cfg.station_comment;
 

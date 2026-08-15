@@ -24,7 +24,7 @@ void encodeAddress(const std::string& callsign_ssid, bool last, bool c_bit, uint
     }
 
   
-    uint8_t b = 0x60;  // reserved bits set
+    uint8_t b = 0x60;  
     b |= static_cast<uint8_t>((ssid & 0x0F) << 1);
     if (last) b |= 0x01;
     if (c_bit) b |= 0x80;
@@ -102,14 +102,14 @@ std::vector<uint8_t> encodeAxUdpFrame(const std::string& tnc2_line) {
         frame.insert(frame.end(), addr, addr + 7);
     }
 
-    frame.push_back(0x03);  // control: UI frame
-    frame.push_back(0xF0);  // PID: no layer 3
+    frame.push_back(0x03);  
+    frame.push_back(0xF0); 
 
     for (char c : info) frame.push_back(static_cast<uint8_t>(c));
 
     uint16_t fcs = computeFcs(frame);
-    frame.push_back(static_cast<uint8_t>(fcs & 0xFF));         // low byte first
-    frame.push_back(static_cast<uint8_t>((fcs >> 8) & 0xFF));  // high byte
+    frame.push_back(static_cast<uint8_t>(fcs & 0xFF));         
+    frame.push_back(static_cast<uint8_t>((fcs >> 8) & 0xFF)); 
 
     return frame;
 }

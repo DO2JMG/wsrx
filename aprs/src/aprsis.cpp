@@ -165,13 +165,12 @@ void AprsIsClient::connectionLoop() {
             disconnectLocked();
         } else if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                continue;  // just a recv timeout, connection still alive
+                continue;  
             }
             log_.warn(std::string("APRS-IS: connection error (") + std::strerror(errno) + "), reconnecting");
             std::lock_guard<std::mutex> lock(sock_mutex_);
             disconnectLocked();
         }
-        // n > 0: server chatter (comments/keepalive), ignored.
     }
 
     std::lock_guard<std::mutex> lock(sock_mutex_);

@@ -69,7 +69,7 @@ void stationBeaconLoop(const AprsConfig& cfg, AprsIsClient& aprs, UdpForwarder& 
     while (!g_shutdown.load()) {
         std::string line = AprsFormat::buildStationBeacon(cfg);
         bool aprs_ok = aprs.sendLine(line);
-        udp_out.send(line);  // fire-and-forget, independent of APRS-IS state
+        udp_out.send(line); 
 
         if (aprs_ok) {
             log.debug("Station beacon sent: " + line);
@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
         socklen_t src_len = sizeof(src);
         ssize_t n = ::recvfrom(udp_fd, buf, sizeof(buf) - 1, 0, reinterpret_cast<sockaddr*>(&src), &src_len);
         if (n < 0) {
-            continue;  // recv timeout or interrupted, loop checks g_shutdown
+            continue;  
         }
         buf[n] = '\0';
 
@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
 
         std::string line = AprsFormat::buildObjectReport(cfg, frame);
         bool ok = aprs.sendLine(line);
-        udp_out.send(line);  // fire-and-forget, independent of APRS-IS state
+        udp_out.send(line);  
 
         if (ok) {
             log.info("Forwarded " + type + " " + serial + " to APRS-IS");

@@ -26,7 +26,6 @@ bool parseString(const std::string& s, size_t& i, std::string& out) {
                 case 'r': out += '\r'; break;
                 case 't': out += '\t'; break;
                 case 'u':
-                    // Skip \uXXXX, not needed for our flat ASCII schema.
                     if (i + 5 < s.size()) i += 4;
                     break;
                 default: out += n; break;
@@ -38,7 +37,7 @@ bool parseString(const std::string& s, size_t& i, std::string& out) {
         }
     }
     if (i >= s.size() || s[i] != '"') return false;
-    ++i;  // closing quote
+    ++i; 
     return true;
 }
 
@@ -84,7 +83,6 @@ bool JsonObject::parse(const std::string& text, JsonObject& out) {
             v.is_string = true;
             v.s = s;
         } else if (i < text.size() && (text[i] == 't' || text[i] == 'f' || text[i] == 'n')) {
-            // true / false / null - skip token, not used in our schema.
             while (i < text.size() && isalpha(static_cast<unsigned char>(text[i]))) ++i;
             v.is_string = false;
             v.d = 0.0;
@@ -117,7 +115,7 @@ std::string JsonObject::getString(const std::string& key, const std::string& fal
     auto it = values_.find(key);
     if (it == values_.end()) return fallback;
     if (it->second.is_string) return it->second.s;
-    // Numbers requested as strings (shouldn't normally happen for our keys).
+   
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", it->second.d);
     return buf;
