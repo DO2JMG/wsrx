@@ -55,20 +55,7 @@ static bool shouldLogDecoderLine(const std::string& line, bool decoder_debug) {
     if (startsWith(line, "[pipeline]")) return true;
     if (startsWith(line, "IF:")) return true;
     if (startsWith(line, "dec:")) return true;
-    if (line.find("Baseband power") != std::string::npos) return true;
     return false;
-}
-
-static std::optional<double> extractBasebandPowerDb(const std::string& line) {
-    static const std::regex re(R"(Baseband\s+power\s*[:=]?\s*(-?(?:[0-9]+(?:[.,][0-9]+)?|inf))\s*dB)", std::regex_constants::icase);
-    std::smatch m;
-    if (std::regex_search(line, m, re)) {
-        std::string v = m[1];
-        if (v == "inf" || v == "-inf") return std::nullopt;
-        std::replace(v.begin(), v.end(), ',', '.');
-        return std::stod(v);
-    }
-    return std::nullopt;
 }
 
 static void handleSignal(int) {
@@ -234,9 +221,8 @@ static std::string makeTempKa9qScript(const Config& cfg, const std::string& deco
            << "if command -v stdbuf >/dev/null 2>&1; then DEC_PREFIX='stdbuf -oL'; else DEC_PREFIX=''; fi\n";
 
     script << "pcmrecord --ssrc " << ssrc
-           << " --catmode --raw " << shellQuote(cfg.ka9q_pcm);
-
-    script << " | $DEC_PREFIX " << shellQuote(decoder_cmd) << " " << decoder_args << "\n";
+           << " --catmode --raw " << shellQuote(cfg.ka9q_pcm)
+           << " | $DEC_PREFIX " << shellQuote(decoder_cmd) << " " << decoder_args << "\n";
 
     script.close();
     chmod(tmpl, 0700);
@@ -412,17 +398,18 @@ static std::string buildDecoderCommand(const Config& cfg, Logger& log) {
     const std::string decoder_name = normalizeDecoderName(cfg.decoder);
     const std::string label = decoderLabel(decoder_name);
     const std::string cmd_path = decoderCommandPath(cfg, decoder_name);
-    const std::string args = decoderArgsFor(cfg, decoder_name);
 
     if (!fileExists(cmd_path)) {
         throw std::runtime_error(label + " decoder not found: " + cmd_path + " (expected in decoder/ next to wsrx)");
     }
     if (!cfg.wav_file.empty()) {
+        const std::string args = decoderArgsFor(cfg, decoder_name);
         std::string prefix;
         if (std::system("command -v stdbuf >/dev/null 2>&1") == 0) prefix = "stdbuf -oL ";
         return prefix + shellQuote(cmd_path) + " " + args + " " + shellQuote(cfg.wav_file);
     }
 
+    const std::string args = decoderArgsFor(cfg, decoder_name);
     return buildKa9qDecoderPipeline(cfg, cmd_path, label, args, log);
 }
 
@@ -1255,6 +1242,10 @@ struct Channel {
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> reader_exited{false};
     std::thread reader_thread;
+    // Periodically refreshes latest_rssi_db via pollChannelPowerDb() -- see
+    // channelRssiPollThread(). Not started in -wav (offline file) mode,
+    // where there's no live radio to poll.
+    std::thread rssi_poll_thread;
     std::mutex state_mutex;
 };
 
@@ -1264,6 +1255,64 @@ static bool frequencyAlreadyActiveLocked(const std::vector<std::unique_ptr<Chann
         if (std::fabs(ch->cfg.frequency_mhz - mhz) <= window_mhz) return true;
     }
     return false;
+}
+
+static std::optional<double> pollChannelPowerDb(const Config& cfg, Logger& log) {
+    const std::string powers = "powers";
+    const long long center_hz = freqHz(cfg.frequency_mhz);
+    const long long window_hz = static_cast<long long>(cfg.ka9q_high_hz) - static_cast<long long>(cfg.ka9q_low_hz);
+    if (window_hz <= 0) return std::nullopt;
+
+
+    constexpr int kRssiPollBins = 8;
+    constexpr int kRssiPollDwellSec = 1;
+    const long long bin_width_hz = std::max<long long>(1, window_hz / kRssiPollBins);
+
+    const std::string tag = std::to_string(::getpid()) + "_" + std::to_string(center_hz);
+    const std::string log_path = "/tmp/wsrx_rssi_" + tag + ".csv";
+    const std::string err_path = "/tmp/wsrx_rssi_" + tag + ".err";
+    const std::string ssrc = ka9qSsrc(cfg.frequency_mhz, 2);
+
+    std::ostringstream cmd;
+    cmd << "timeout " << (kRssiPollDwellSec + 5) << " "
+        << powers << " " << shellQuote(cfg.ka9q_radio) << " "
+        << "-f " << center_hz << " "
+        << "-w " << bin_width_hz << " "
+        << "-b " << kRssiPollBins << " "
+        << "-i " << kRssiPollDwellSec << " "
+        << "-s " << ssrc << " "
+        << "-c 2 > " << shellQuote(log_path) << " 2>" << shellQuote(err_path);
+
+    if (cfg.verbose || cfg.decoder_debug) log.debug("rssi poll command: " + cmd.str());
+
+    int rc = 0;
+    {
+        std::lock_guard<std::mutex> powers_lock(g_powers_mutex);
+        rc = std::system(cmd.str().c_str());
+    }
+    std::remove(err_path.c_str());
+    if (rc != 0) {
+        std::remove(log_path.c_str());
+        return std::nullopt;
+    }
+
+    std::vector<SpectrumBin> bins = readKa9qPowerCsv(log_path, log);
+    std::remove(log_path.c_str());
+    if (bins.empty()) return std::nullopt;
+
+    double best = bins.front().power_db;
+    for (const auto& b : bins) best = std::max(best, b.power_db);
+    return best;
+}
+
+static void channelRssiPollThread(Channel* ch, Logger& log) {
+    while (!g_shutdown && !ch->stop_requested.load()) {
+        auto db = pollChannelPowerDb(ch->cfg, log);
+        if (db) ch->latest_rssi_db = *db;
+        for (int i = 0; i < 20 && !g_shutdown && !ch->stop_requested.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
 }
 
 static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
@@ -1307,8 +1356,6 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
                 prefix << "decoder " << ch->cfg.frequency_mhz << ": " << *line;
                 log.debug(prefix.str());
             }
-            if (auto rssi = extractBasebandPowerDb(*line)) ch->latest_rssi_db = *rssi;
-
             auto frame = ch->parser.parseLine(*line, ch->cfg.frequency_mhz, base_cfg.callsign);
             if (frame) {
                 if (!std::isnan(ch->latest_rssi_db)) frame->rssi_db = ch->latest_rssi_db;
@@ -1342,6 +1389,10 @@ static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config&
     auto ch = startChannelProcess(cfg, log);
     Channel* ptr = ch.get();
     ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(udp_sender));
+    // No live radio to poll in -wav (offline file) mode.
+    if (cfg.wav_file.empty()) {
+        ptr->rssi_poll_thread = std::thread(channelRssiPollThread, ptr, std::ref(log));
+    }
     return ch;
 }
 
@@ -1352,6 +1403,7 @@ static void stopChannel(Channel& ch, Logger& log) {
     ch.stop_requested.store(true);
     ch.decoder.stop();
     if (ch.reader_thread.joinable()) ch.reader_thread.join();
+    if (ch.rssi_poll_thread.joinable()) ch.rssi_poll_thread.join();
     closeKa9qChannel(ch.cfg, log);
 }
 
