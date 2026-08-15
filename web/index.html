@@ -31,41 +31,51 @@
         </div>
       </div>
       <div class="row controls">
-        <button class="primary" data-action="start">Start</button>
-        <button class="danger" data-action="stop">Stop</button>
-        <button data-action="restart">Restart</button>
-        <button id="refreshBtn">Refresh</button>
-        <button class="danger" data-action="clearlogs">Clear Logs</button>
-        <button id="themeToggle" class="theme-toggle" title="Design umschalten">🌙 Night</button>
+        <button id="menuToggle" class="menu-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="menuActions">☰ Menu</button>
+        <div class="menu-actions" id="menuActions">
+          <button class="primary" data-action="start">Start</button>
+          <button class="danger" data-action="stop">Stop</button>
+          <button data-action="restart">Restart</button>
+          <button id="refreshBtn">Refresh</button>
+          <button class="danger" data-action="clearlogs">Clear Logs</button>
+          <button data-action="update" title="Runs update.sh: pulls from git, rebuilds, restarts">Update</button>
+          <button id="themeToggle" class="theme-toggle" title="Design umschalten">🌙 Night</button>
+        </div>
       </div>
     </section>
+    <div class="row" id="updateStatusRow">
+      <span class="small editor-status" id="updateStatus"></span>
+    </div>
 
     <section class="status-grid">
       <article class="info-card">
         <div class="label">Status</div>
-        <div class="value" id="running">...</div>
-        <br>
-        <span class="cpu-badge small" id="cpuLoad">CPU: -</span>
+        <div class="status-line">
+          <span class="value" id="running">...</span>
+          <span class="status-meta small">
+            <span class="cpu-badge">CPU: <span id="cpuLoad" class="strong-value">-</span></span>
+            <span class="status-sep">·</span>
+            <span>PID: <span id="pid" class="strong-value">...</span></span>
+            <span class="status-sep">·</span>
+            <span>Updated: <span id="updated" class="strong-value">...</span></span>
+          </span>
+        </div>
       </article>
       <article class="info-card">
-        <div class="label">PID</div>
-        <div class="value" id="pid">...</div>
-      </article>
-      <article class="info-card info-card-wide">
-        <div class="label">Active Channels</div>
-        <div class="value" id="channelCount">...</div>
+        <div class="status-line">
+          <span class="label">Active Channels</span>
+          <span class="value" id="channelCount">...</span>
+        </div>
         <div class="channels small" id="channels"></div>
-      </article>
-      <article class="info-card">
-        <div class="label">Last Update</div>
-        <div class="value small" id="updated">...</div>
       </article>
     </section>
 
     <section class="content-grid">
       <section class="panel spectrum-panel" id="spectrumSection">
-        <h2>Scanner</h2>
-        <div class="panel-subtitle">Spectrum / scan peaks</div>
+        <div class="panel-title-row">
+          <h2>Scanner</h2>
+          <div class="panel-subtitle">Spectrum / scan peaks</div>
+        </div>
         <div class="muted small" id="spectrumInfo">Last scan: -</div>
         <div class="spectrum-canvas-wrap">
           <canvas id="spectrumCanvas"></canvas>
@@ -85,13 +95,33 @@
         <button class="tab" data-tab="blacklist">Blacklist</button>
         <button class="tab" data-tab="radiosondes">Radiosondes</button>
         <button data-action="radar">Radar</button>
-        <button class="tab" data-tab="rawstatus">Raw Status</button>
       </nav>
 
       <section id="log" class="pane active"><pre id="logText">loading...</pre></section>
-      <section id="config" class="pane"><pre id="configText">loading...</pre></section>
-      <section id="whitelist" class="pane"><pre id="whitelistText">loading...</pre></section>
-      <section id="blacklist" class="pane"><pre id="blacklistText">loading...</pre></section>
+      <section id="config" class="pane">
+        <div class="row editor-toolbar">
+          <button class="primary" data-editor-action="save" data-editor-key="config">Save</button>
+          <button data-editor-action="reload" data-editor-key="config">Reload</button>
+          <span class="small editor-status" id="configStatus"></span>
+        </div>
+        <textarea id="configText" class="editor" spellcheck="false">loading...</textarea>
+      </section>
+      <section id="whitelist" class="pane">
+        <div class="row editor-toolbar">
+          <button class="primary" data-editor-action="save" data-editor-key="whitelist">Save</button>
+          <button data-editor-action="reload" data-editor-key="whitelist">Reload</button>
+          <span class="small editor-status" id="whitelistStatus"></span>
+        </div>
+        <textarea id="whitelistText" class="editor" spellcheck="false">loading...</textarea>
+      </section>
+      <section id="blacklist" class="pane">
+        <div class="row editor-toolbar">
+          <button class="primary" data-editor-action="save" data-editor-key="blacklist">Save</button>
+          <button data-editor-action="reload" data-editor-key="blacklist">Reload</button>
+          <span class="small editor-status" id="blacklistStatus"></span>
+        </div>
+        <textarea id="blacklistText" class="editor" spellcheck="false">loading...</textarea>
+      </section>
       <section id="radiosondes" class="pane">
         <div class="row radiosonde-filter">
           <button class="tab active" data-hours="12" data-action="sonde-filter">12 hours</button>
@@ -102,9 +132,9 @@
             <thead>
               <tr>
                 <th>Serial</th>
-                <th>Type</th>
-                <th>Frequency</th>
                 <th>Launchsite</th>
+                <th>Frequency</th>
+                <th>Type</th>
                 <th>First altitude</th>
                 <th>Last altitude</th>
                 <th>Distance</th>
@@ -118,6 +148,7 @@
           </table>
         </div>
       </section>
+      <section id="updatelog" class="pane"><pre id="updateLogText">No update has been run yet.</pre></section>
       <section id="rawstatus" class="pane"><pre id="statusText">loading...</pre></section>
     </section>
   </main>
@@ -154,4 +185,3 @@
   <script src="/app.js"></script>
 </body>
 </html>
-

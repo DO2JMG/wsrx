@@ -167,7 +167,7 @@ async function refreshStatus() {
         cachedCallsign = '';
       }
     }
-    setText('path', cachedCallsign ? ('Receiver: ' + cachedCallsign) : '');
+    setHtml('path', cachedCallsign ? ('Receiver: <span class="header-value">' + escapeHtml(cachedCallsign) + '</span>') : '');
     setText('statusText', s.raw || '');
     const channels = s.channels || [];
     activeChannelFreqs = channels.map(x => Number(x)).filter(x => Number.isFinite(x));
@@ -336,12 +336,18 @@ function drawSpectrum(spec, peaksDoc) {
   ctx.fillText('Power (dB)', 0, 0);
   ctx.restore();
 
-  const peakText = peaks.length ? peaks.map(p => p[0].toFixed(3) + ' MHz').join(', ') : 'none';
+  const peakText = peaks.length
+    ? peaks.map(p => `<span class="scanner-value">${p[0].toFixed(3)}</span> MHz`).join(', ')
+    : 'none';
   const liveTs = spec.timestamp || '-';
   const scanTs = peaksDoc && peaksDoc.timestamp ? peaksDoc.timestamp : '-';
   const noiseText = Number.isFinite(noise) ? noise.toFixed(1) : '-';
   const trigText = Number.isFinite(trig) ? trig.toFixed(1) : '-';
-  info.textContent = `Live: ${liveTs} | Last scan: ${scanTs} | Noise ${noiseText} dB | Trigger ${trigText} dB | Peaks: ${peakText}`;
+  info.innerHTML = `Live: <span class="scanner-value">${escapeHtml(liveTs)}</span> | ` +
+    `Last scan: <span class="scanner-value">${escapeHtml(scanTs)}</span> | ` +
+    `Noise <span class="scanner-value">${noiseText}</span> dB | ` +
+    `Trigger <span class="scanner-value">${trigText}</span> dB | ` +
+    `Peaks: ${peakText}`;
 }
 
 const spectrumBinSmoothed = new Map();
@@ -436,9 +442,9 @@ function renderRadiosondesTable() {
   rows.innerHTML = sondes.map(s => `
     <tr data-serial="${escapeHtml(s.serial || '')}">
       <td>${s.serial || '-'}</td>
-      <td>${s.type || '-'}</td>
-      <td>${fmtFrequency(s.frequency)}</td>
       <td>${s.launchsite || '-'}</td>
+      <td>${fmtFrequency(s.frequency)}</td>
+      <td>${s.type || '-'}</td>
       <td>${fmtAltitude(s.first_altitude)}</td>
       <td>${fmtAltitude(s.last_altitude)}</td>
       <td>${fmtDistanceBearing(s.distance_km, s.bearing_deg, s.elevation_deg)}</td>
@@ -465,11 +471,21 @@ async function loadRadiosondesFull() {
   }
 }
 
+function mergeSondeRecord(existing, incoming) {
+  const merged = existing ? { ...existing } : {};
+  for (const key of Object.keys(incoming)) {
+    const v = incoming[key];
+    if (v === null || v === undefined || v === '') continue;
+    merged[key] = v;
+  }
+  return merged;
+}
+
 async function refreshRadiosondesActive() {
   try {
     const data = await getJson('/api/radiosondes?active_sec=' + ACTIVE_SONDE_MAX_AGE_SEC);
     const sondes = Array.isArray(data.radiosondes) ? data.radiosondes : [];
-    for (const s of sondes) sondesCache.set(s.serial, s);
+    for (const s of sondes) sondesCache.set(s.serial, mergeSondeRecord(sondesCache.get(s.serial), s));
     renderRadiosondesTable();
   } catch (e) {
 
@@ -480,9 +496,9 @@ async function refreshCpu() {
   try {
     const c = await getJson('/api/cpu');
     const pct = Number(c.cpu_percent);
-    setText('cpuLoad', Number.isFinite(pct) ? ('CPU: ' + pct.toFixed(1) + '%') : 'CPU: -');
+    setText('cpuLoad', Number.isFinite(pct) ? (pct.toFixed(1) + '%') : '-');
   } catch (e) {
-    setText('cpuLoad', 'CPU: -');
+    setText('cpuLoad', '-');
   }
 }
 
@@ -493,9 +509,7 @@ async function refreshAll() {
   await refreshCpu();
   await refreshSpectrum();
   if (activeTab === 'log') setLogText(await getText('/api/log?lines=300'));
-  if (activeTab === 'config') setText('configText', await getText('/api/config'));
-  if (activeTab === 'whitelist') setText('whitelistText', await getText('/api/whitelist'));
-  if (activeTab === 'blacklist') setText('blacklistText', await getText('/api/blacklist'));
+
   if (activeTab === 'radiosondes') {
 
     const now = Date.now();
@@ -509,6 +523,12 @@ async function refreshAll() {
 async function action(cmd) {
   if (cmd === 'stop' && !confirm('Really stop wsrx?')) return;
   if (cmd === 'clearlogs' && !confirm('Really delete wsrx.log, wsrx-web.log and all radiosonde logs? This cannot be undone.')) return;
+  if (cmd === 'update' && !confirm(
+    'Start update?\n\n' +
+    'update.sh will stop wsrx AND this web interface, pull from git, rebuild, ' +
+    'and restart both. This page will go quiet for a bit and pick back up on its own ' +
+    'once the rebuild is done (can take a few minutes). Continue?'
+  )) return;
   const r = await fetch('/api/' + cmd, { method: 'POST' });
   const t = await r.text();
   setText('statusText', t);
@@ -516,8 +536,96 @@ async function action(cmd) {
     sondesCache = new Map();
     renderRadiosondesTable();
   }
+  if (cmd === 'update') {
+    const updateStatusEl = document.getElementById('updateStatus');
+    if (updateStatusEl) {
+      updateStatusEl.textContent = t.split('\n')[0];
+      updateStatusEl.classList.toggle('ok', r.ok);
+      updateStatusEl.classList.toggle('bad', !r.ok);
+    }
+  }
   setTimeout(refreshAll, 700);
 }
+
+const FILE_EDITORS = {
+  config: { url: '/api/config', textareaId: 'configText', statusId: 'configStatus', dirty: false },
+  whitelist: { url: '/api/whitelist', textareaId: 'whitelistText', statusId: 'whitelistStatus', dirty: false },
+  blacklist: { url: '/api/blacklist', textareaId: 'blacklistText', statusId: 'blacklistStatus', dirty: false },
+};
+
+function editorTextarea(key) {
+  return document.getElementById(FILE_EDITORS[key].textareaId);
+}
+
+function setEditorStatus(key, msg, kind) {
+  const el = document.getElementById(FILE_EDITORS[key].statusId);
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('ok', kind === 'ok');
+  el.classList.toggle('bad', kind === 'bad');
+}
+
+async function loadEditor(key, force) {
+  const ed = FILE_EDITORS[key];
+  if (!ed || (ed.dirty && !force)) return;
+  const ta = editorTextarea(key);
+  if (!ta) return;
+  try {
+    ta.value = await getText(ed.url);
+    ed.dirty = false;
+    setEditorStatus(key, '');
+  } catch (e) {
+    setEditorStatus(key, 'Could not load file', 'bad');
+  }
+}
+
+function markEditorDirty(key) {
+  FILE_EDITORS[key].dirty = true;
+  setEditorStatus(key, 'Unsaved changes');
+}
+
+async function saveEditor(key) {
+  const ed = FILE_EDITORS[key];
+  const ta = editorTextarea(key);
+  if (!ed || !ta) return;
+  setEditorStatus(key, 'Saving…');
+  try {
+    const r = await fetch(ed.url, { method: 'POST', body: ta.value });
+    const t = await r.text();
+    if (r.ok) {
+      ed.dirty = false;
+      setEditorStatus(key, 'Saved – restart wsrx to apply', 'ok');
+    } else {
+      setEditorStatus(key, 'Save failed: ' + t.trim(), 'bad');
+    }
+  } catch (e) {
+    setEditorStatus(key, 'Save failed', 'bad');
+  }
+}
+
+function reloadEditor(key) {
+  const ed = FILE_EDITORS[key];
+  if (ed && ed.dirty && !confirm('Discard unsaved changes?')) return;
+  loadEditor(key, true);
+}
+
+Object.keys(FILE_EDITORS).forEach(key => {
+  const ta = editorTextarea(key);
+  if (ta) ta.addEventListener('input', () => markEditorDirty(key));
+});
+
+document.querySelectorAll('[data-editor-action]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.editorKey;
+    if (btn.dataset.editorAction === 'save') saveEditor(key);
+    else if (btn.dataset.editorAction === 'reload') reloadEditor(key);
+  });
+});
+
+window.addEventListener('beforeunload', (e) => {
+  const anyDirty = Object.values(FILE_EDITORS).some(ed => ed.dirty);
+  if (anyDirty) { e.preventDefault(); e.returnValue = ''; }
+});
 
 function showTab(id, btn) {
   activeTab = id;
@@ -529,6 +637,7 @@ function showTab(id, btn) {
     lastRadiosondesRefresh = Date.now();
     loadRadiosondesFull();
   }
+  if (FILE_EDITORS[id]) loadEditor(id, false);
   refreshAll();
 }
 
@@ -709,8 +818,6 @@ async function radarDrawFrame() {
   const stationEl = document.getElementById('radarStation');
   const closestEl = document.getElementById('radarClosest');
 
-  // Fetch first, draw once the new data is ready — clearing the canvas
-  // before the fetch resolves is what caused the visible blink.
   let data;
   try {
     data = await getJson('/api/radiosondes');
@@ -940,6 +1047,35 @@ document.getElementById('sondeDialog')?.addEventListener('click', (e) => {
 
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
 window.addEventListener('resize', () => { if (lastSpectrum) drawSpectrum(lastSpectrum, lastPeaks); });
+
+(function initControlsMenu() {
+  const toggleBtn = document.getElementById('menuToggle');
+  const actionsEl = document.getElementById('menuActions');
+  if (!toggleBtn || !actionsEl) return;
+
+  function setOpen(open) {
+    actionsEl.classList.toggle('open', open);
+    toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(!actionsEl.classList.contains('open'));
+  });
+
+
+  actionsEl.addEventListener('click', (e) => {
+    if (e.target.tagName === 'BUTTON') setOpen(false);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!actionsEl.contains(e.target) && e.target !== toggleBtn) setOpen(false);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setOpen(false);
+  });
+})();
 
 const themeToggleBtn = document.getElementById('themeToggle');
 if (themeToggleBtn) themeToggleBtn.addEventListener('click', toggleTheme);
