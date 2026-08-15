@@ -236,6 +236,85 @@ std::string normalizeLMS6Serial(const std::string& serial) {
     return "LMS6" + hex_suffix;
 }
 
+std::string normalizeMrzSerial(const std::string& serial) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    for (size_t i = 0; i <= serial.size(); ++i) {
+        if (i == serial.size() || serial[i] == '-') {
+            parts.push_back(serial.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    if (parts.size() < 3) return serial;
+
+    const std::string concatenated = parts[1] + parts[2];
+    if (concatenated.empty()) return serial;
+    for (unsigned char c : concatenated) {
+        if (!std::isdigit(c)) return serial;
+    }
+
+    unsigned long id_val = 0;
+    try {
+        id_val = std::stoul(concatenated);
+    } catch (const std::exception&) {
+        return serial;
+    }
+
+    std::string hex_suffix = padHex(id_val, 6);
+    if (hex_suffix.size() > 6) {
+        hex_suffix = hex_suffix.substr(hex_suffix.size() - 6);
+    }
+
+    return "MRZ" + hex_suffix;
+}
+
+std::string normalizeMts01Serial(const std::string& serial) {
+    const auto dash = serial.rfind('-');
+    if (dash == std::string::npos || dash + 1 >= serial.size()) return serial;
+
+    const std::string digits = serial.substr(dash + 1);
+    for (unsigned char c : digits) {
+        if (!std::isdigit(c)) return serial;
+    }
+
+    unsigned long id_val = 0;
+    try {
+        id_val = std::stoul(digits);
+    } catch (const std::exception&) {
+        return serial;
+    }
+
+    const std::string hex_digits = padHex(id_val, 1);
+    const std::string prefixed = "0X" + hex_digits;
+    const std::string suffix = prefixed.size() > 6 ? prefixed.substr(prefixed.size() - 6) : prefixed;
+
+    return "MTS" + suffix;
+}
+
+std::string normalizeCf06Ht03Serial(const std::string& serial) {
+    const auto dash = serial.find('-');
+    if (dash == std::string::npos || dash + 1 >= serial.size()) return serial;
+
+    const std::string prefix = serial.substr(0, dash);
+    const std::string suffix = serial.substr(dash + 1);
+
+    if (prefix == "CF6") {
+        if (suffix.size() != 8) return serial;
+        for (unsigned char c : suffix) {
+            if (!std::isdigit(c)) return serial;
+        }
+        return "CF6" + suffix;
+    }
+    if (prefix == "GTH") {
+        if (suffix.size() != 8) return serial;
+        for (unsigned char c : suffix) {
+            if (!std::isxdigit(c)) return serial;
+        }
+        return "GTH" + upperCopy(suffix);
+    }
+    return serial;
+}
+
 std::string normalizeImet(const std::string& serial, int frame, const std::string& hhmmss) {
     if (frame >= 0) {
         const int seconds_of_day = secondsOfDayFromHhmmss(hhmmss);
@@ -397,6 +476,12 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         f.serial = normalizeSRSC50(f.serial);
     } else if (normalized_type_upper.find("LMS") != std::string::npos) {
         f.serial = normalizeLMS6Serial(f.serial);
+    } else if (normalized_type_upper.find("MTS01") != std::string::npos) {
+        f.serial = normalizeMts01Serial(f.serial);
+    } else if (normalized_type_upper.find("MRZ") != std::string::npos) {
+        f.serial = normalizeMrzSerial(f.serial);
+    } else if (normalized_type_upper.find("CF6") != std::string::npos || normalized_type_upper.find("GTH") != std::string::npos) {
+        f.serial = normalizeCf06Ht03Serial(f.serial);
     } else {
         f.serial = normalizeDFMSerial(f.serial, f.type);
     }

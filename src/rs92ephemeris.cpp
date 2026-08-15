@@ -35,7 +35,6 @@ struct YearDay {
     int doy = 0;    // day of year, 1-366
 };
 
-// UTC "today minus days_back" as (year, 2-digit year, day-of-year).
 YearDay utcDateMinusDays(int days_back) {
     std::time_t t = std::time(nullptr) - static_cast<std::time_t>(days_back) * 86400;
     std::tm tm{};
@@ -53,12 +52,10 @@ std::string pad(int value, int width) {
     return oss.str();
 }
 
-// Classic RINEX-2 daily GPS broadcast ephemeris filename, e.g. "brdc0430.26n".
 std::string rnxFileName(const YearDay& yd) {
     return "brdc" + pad(yd.doy, 3) + "0." + pad(yd.yy, 2) + "n";
 }
 
-// Runs a shell command, discarding stdout/stderr. Returns true on exit code 0.
 bool runQuiet(const std::string& cmd) {
     std::string full = cmd + " >/dev/null 2>&1";
     return std::system(full.c_str()) == 0;
@@ -68,8 +65,6 @@ bool commandExists(const std::string& name) {
     return runQuiet("command -v " + shellQuote(name));
 }
 
-// Runs a shell command, capturing combined stdout+stderr into `output`.
-// Returns true on exit code 0.
 bool runCapture(const std::string& cmd, std::string& output) {
     output.clear();
     char tmpl[] = "/tmp/wsrx-rs92eph-XXXXXX";
@@ -85,7 +80,6 @@ bool runCapture(const std::string& cmd, std::string& output) {
         std::ostringstream oss;
         oss << in.rdbuf();
         output = oss.str();
-        // Trim to keep log lines readable.
         if (output.size() > 300) output = output.substr(0, 300) + "...";
         while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) output.pop_back();
     }
@@ -100,10 +94,8 @@ bool looksLikeRinex2GpsNav(const std::string& path) {
     std::string first_line;
     if (!std::getline(in, first_line)) return false;
 
-    // Header line 1 e.g.: "     2.11           N: GPS NAV DATA                        RINEX VERSION / TYPE"
     if (first_line.find("RINEX VERSION") == std::string::npos) return false;
 
-    // Version field is the first token; must be RINEX 2.x, not 3.x/4.x.
     std::istringstream iss(first_line);
     std::string version_token;
     iss >> version_token;

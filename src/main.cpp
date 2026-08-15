@@ -39,7 +39,7 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.04";
+static constexpr const char* APP_VERSION = "0.1.05";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -308,6 +308,10 @@ static std::string normalizeDecoderName(const std::string& decoder) {
     if (d.find("lms6") != std::string::npos) return "lms6";
     if (d.find("rd94") != std::string::npos || d.find("rd41") != std::string::npos ||
         d.find("dropsonde") != std::string::npos) return "dropsonde";
+    if (d.find("mts01") != std::string::npos) return "mts01";
+    if (d.find("mrz") != std::string::npos || d.find("mp3h1") != std::string::npos) return "mrz";
+    if (d.find("cf06") != std::string::npos || d.find("ht03") != std::string::npos ||
+        d.find("cf6") != std::string::npos || d.find("gth") != std::string::npos) return "cf06ht03";
     return d;
 }
 
@@ -324,6 +328,9 @@ static std::string decoderLabel(const std::string& decoder) {
     if (d == "lms6") return "LMS6";
     if (d == "s1") return "S1";
     if (d == "dropsonde") return "RD94RD41";
+    if (d == "mrz") return "MRZ";
+    if (d == "mts01") return "MTS01";
+    if (d == "cf06ht03") return "CF6GTH";
     return decoder;
 }
 
@@ -339,6 +346,9 @@ static void validateRequiredDecoderFiles(const Config& cfg) {
         "c50iq",
         "windsondmod",
         "rd94rd41drop",
+        "mp3h1mod",
+        "mts01mod",
+        "cf06ht03mod",
         "dft_detect"
     };
 
@@ -368,6 +378,9 @@ static std::string decoderCommandPath(const Config& cfg, const std::string& deco
     if (d == "c34c50") return joinPath(cfg.decoder_dir, "c50iq");
     if (d == "s1") return joinPath(cfg.decoder_dir, "windsondmod");
     if (d == "dropsonde") return joinPath(cfg.decoder_dir, "rd94rd41drop");
+    if (d == "mrz") return joinPath(cfg.decoder_dir, "mp3h1mod");
+    if (d == "mts01") return joinPath(cfg.decoder_dir, "mts01mod");
+    if (d == "cf06ht03") return joinPath(cfg.decoder_dir, "cf06ht03mod");
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -389,6 +402,9 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     if (d == "c34c50") return expandDecoderArgs("--json --ptu --xor-auto --lpIQ --dc --iq {iq_offset} - {sample_rate} 16", cfg);
     if (d == "s1") return expandDecoderArgs("--iq --samplerate {sample_rate} --json --frequency {frequency_hz}", cfg);
     if (d == "dropsonde") return expandDecoderArgs("--json --iq0 --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "mrz") return expandDecoderArgs("--lpIQ --ptu --json --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "mts01") return expandDecoderArgs("--json --lpIQ --dc --IQ {iq_offset} - {sample_rate} 16", cfg);
+    if (d == "cf06ht03") return expandDecoderArgs("--ecc2 --json --lpIQ --dc --IQ {iq_offset} - {sample_rate} 16", cfg);
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
@@ -429,7 +445,7 @@ static std::optional<ScanDetection> parseDftDetectOutput(const std::string& outp
     ScanDetection det;
     det.frequency_mhz = frequency_mhz;
 
-    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01", "S1", "RD94RD41"};
+    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01", "S1", "RD94RD41", "CF6GTH"};
     for (const auto& k : known) {
         if (first_line.find(k) != std::string::npos) {
             det.sonde_type = k;
@@ -1036,10 +1052,13 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     if (cfg.decoder_type_meisei) types.push_back("MEISEI");
     if (cfg.decoder_type_c34c50) types.push_back("C34C50");
     if (cfg.decoder_type_dropsonde) types.push_back("RD94RD41");
+    if (cfg.decoder_type_mrz) types.push_back("MRZ");
+    if (cfg.decoder_type_mts01) types.push_back("MTS01");
+    if (cfg.decoder_type_cf06ht03) types.push_back("CF6GTH");
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
-        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92", "LMS6"};
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92", "LMS6", "MRZ", "MTS01", "CF6GTH"};
     }
 
     std::string out;
@@ -1429,7 +1448,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                 const std::string decoder_name = normalizeDecoderName(det->sonde_type);
                 if (decoder_name != "rs41" && decoder_name != "rs92" && decoder_name != "lms6" && decoder_name != "dfm" && decoder_name != "m10" &&
                     decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei" &&
-                    decoder_name != "s1" && decoder_name != "dropsonde") {
+                    decoder_name != "s1" && decoder_name != "dropsonde" &&
+                    decoder_name != "mrz" && decoder_name != "mts01" && decoder_name != "cf06ht03") {
                     std::ostringstream unsupported;
                     unsupported << "scan detected unsupported sonde " << det->sonde_type
                                 << " near " << f_mhz << " MHz";
@@ -1484,8 +1504,6 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     const std::string powers = "powers";
     std::vector<SpectrumBin> merged_spectrum;
 
-    // cfg.radios is sorted by scan_min_mhz at load time, so appending each
-    // backend's spectrum in that order keeps the merged view frequency-ordered.
     for (const auto& radio : cfg.radios) {
         long long start_hz = freqHz(radio.scan_min_mhz);
         long long stop_hz = freqHz(radio.scan_max_mhz);

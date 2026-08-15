@@ -67,8 +67,6 @@ bool UdpSender::sendDatagram(const std::string& data) {
 bool UdpSender::sendTelemetry(const TelemetryFrame& frame) {
     if (!cfg_.udp_enabled) return false;
 
-    // Same acceptance rules as the HTTP uploader, so the serial number
-    // in the JSON is validated/normalized exactly like for the uploader.
     if (!TelemetryJson::hasGpsFix(frame)) {
         return false;
     }
@@ -76,7 +74,8 @@ bool UdpSender::sendTelemetry(const TelemetryFrame& frame) {
         return false;
     }
 
-    const std::string data = TelemetryJson::buildTelemetryJson(frame, cfg_.callsign, APP_VERSION);
+    const TelemetryJson::StationLocation station{cfg_.station_lat, cfg_.station_lon, cfg_.station_alt};
+    const std::string data = TelemetryJson::buildTelemetryJson(frame, cfg_.callsign, APP_VERSION, &station);
 
     if (cfg_.dry_run) {
         log_.info("DRY-RUN UDP telemetry JSON: " + data);

@@ -9,10 +9,6 @@
 
 class Logger;
 
-// Sends the telemetry frame as a JSON UDP datagram to a configured
-// host/port, e.g. for local display tools. Uses exactly the same JSON
-// layout and (already normalized/validated) serial number as the
-// Uploader's HTTP upload, see telemetryjson.h.
 class UdpSender {
 public:
     UdpSender(const Config& cfg, Logger& log);

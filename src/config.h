@@ -30,14 +30,6 @@ struct Config {
 
     std::string decoder_dir = "decoder";
     std::string wav_file;
-
-    // RINEX-2 GPS navigation (broadcast ephemeris) file passed to rs92mod
-    // via "-e <file>". Two modes:
-    //  - rs92_ephemeris_file set (manual override): used as-is, never
-    //    auto-downloaded/overwritten. Must exist on disk.
-    //  - rs92_ephemeris_file empty (default): auto-downloaded on demand
-    //    into rs92_ephemeris_dir (one file per UTC day, reused/cached
-    //    for the rest of that day) whenever an RS92 is actually decoded.
     std::string rs92_ephemeris_file;
     std::string rs92_ephemeris_dir = "ephemeris";
 
@@ -46,8 +38,6 @@ struct Config {
     int ka9q_high_hz = 20000;
     double iq_offset_hz = 0.0;
 
-    // Which sonde types dft_detect should scan for (used to build its
-    // --types argument). Default: all enabled, matching prior behaviour.
     bool decoder_type_rs41 = true;
     bool decoder_type_dfm9 = true;
     bool decoder_type_m10 = true;
@@ -57,6 +47,9 @@ struct Config {
     bool decoder_type_dropsonde = true;
     bool decoder_type_rs92 = true;
     bool decoder_type_lms6 = true;
+    bool decoder_type_mrz = true;   
+    bool decoder_type_mts01 = true;  
+    bool decoder_type_cf06ht03 = true; 
 
     bool scan_enabled = true;
     double scan_min_mhz = 400.0;

@@ -60,9 +60,6 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
-// Frequencies need kHz resolution (3 decimals in MHz), 1 decimal (100 kHz
-// steps) is too coarse and causes the uploaded frequency to drift from the
-// actual sonde frequency.
 void addNumber3(std::ostringstream& oss, bool& first, const std::string& key, double value) {
     addComma(oss, first);
     oss << '"' << key << "\":" << std::fixed << std::setprecision(3) << value << std::defaultfloat;
@@ -71,6 +68,41 @@ void addNumber3(std::ostringstream& oss, bool& first, const std::string& key, do
 void addInt(std::ostringstream& oss, bool& first, const std::string& key, int value) {
     addComma(oss, first);
     oss << '"' << key << "\":" << value;
+}
+
+constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+constexpr double kEarthRadiusM = 6371000.0;
+
+struct LookAngles {
+    double azimuth_deg;
+    double elevation_deg;
+};
+
+LookAngles calculateLookAngles(double aLatDeg, double aLonDeg, double aAltM,
+                                double bLatDeg, double bLonDeg, double bAltM) {
+    const double aLat = aLatDeg * kDegToRad;
+    const double aLon = aLonDeg * kDegToRad;
+    const double bLat = bLatDeg * kDegToRad;
+    const double bLon = bLonDeg * kDegToRad;
+
+    const double dLon = bLon - aLon;
+    const double sa = std::cos(bLat) * std::sin(dLon);
+    const double sb = (std::cos(aLat) * std::sin(bLat)) - (std::sin(aLat) * std::cos(bLat) * std::cos(dLon));
+    double bearing = std::atan2(sa, sb);
+    const double aa = std::sqrt(sa * sa + sb * sb);
+    const double ab = (std::sin(aLat) * std::sin(bLat)) + (std::cos(aLat) * std::cos(bLat) * std::cos(dLon));
+    const double angleAtCentre = std::atan2(aa, ab);
+
+    const double ta = kEarthRadiusM + aAltM;
+    const double tb = kEarthRadiusM + bAltM;
+    const double ea = (std::cos(angleAtCentre) * tb) - ta;
+    const double eb = std::sin(angleAtCentre) * tb;
+    const double elevation_deg = std::atan2(ea, eb) / kDegToRad;
+
+    if (bearing < 0) bearing += 2 * 3.14159265358979323846;
+    const double azimuth_deg = bearing / kDegToRad;
+
+    return {azimuth_deg, elevation_deg};
 }
 
 }  // namespace
@@ -132,11 +164,31 @@ bool validTypeSerial(const TelemetryFrame& frame) {
         return serial != "000000000";
     }
 
+    if (type.find("MTS01") != std::string::npos) {
+        static const std::regex mts01_serial_re(R"(^MTS[0-9A-FX]{1,6}$)");
+        return std::regex_match(serial, mts01_serial_re);
+    }
+
+    if (type.find("MRZ") != std::string::npos) {
+        static const std::regex mrz_serial_re(R"(^MRZ[0-9A-F]{6}$)");
+        return std::regex_match(serial, mrz_serial_re);
+    }
+
+    if (type.find("CF6") != std::string::npos) {
+        static const std::regex cf6_serial_re(R"(^CF6[0-9]{8}$)");
+        return std::regex_match(serial, cf6_serial_re);
+    }
+
+    if (type.find("GTH") != std::string::npos) {
+        static const std::regex gth_serial_re(R"(^GTH[0-9A-F]{8}$)");
+        return std::regex_match(serial, gth_serial_re);
+    }
+
     return true;
 }
 
 std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& callsign,
-                                const std::string& app_version) {
+                                const std::string& app_version, const StationLocation* station) {
     std::ostringstream oss;
     bool first = true;
     const std::string ts = frame.timestamp_hhmmss.empty() ? nowTimestampUtc() : frame.timestamp_hhmmss;
@@ -174,6 +226,13 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     if (frame.sats >= 0) addInt(oss, first, "sat", frame.sats);
     if (!frame.aux.empty()) addString(oss, first, "aux", frame.aux);
     if (!frame.raw_datetime.empty()) addString(oss, first, "datetime", frame.raw_datetime);
+
+    if (station != nullptr && !std::isnan(frame.lat) && !std::isnan(frame.lon) && !std::isnan(frame.alt_m)) {
+        const LookAngles look = calculateLookAngles(station->lat, station->lon, station->alt_m,
+                                                      frame.lat, frame.lon, frame.alt_m);
+        addNumber1(oss, first, "az", look.azimuth_deg);
+        addNumber1(oss, first, "el", look.elevation_deg);
+    }
 
     oss << '}';
     return oss.str();
