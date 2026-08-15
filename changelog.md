@@ -1,4 +1,13 @@
 Version 0.1.04
+- The config.ini, blacklist.txt, and whitelist.txt files can be edited via the web interface
+- Several changes to the web interface
+- Add update button to the web interface
+- Azimuth and elevation angles added for aprsmap
+- Add decoder Meteosis MTS01
+- Add decoder MP3-H1 / MRZ-N1
+- Add decoder Aerospace Newsky CF-06AH / Huayuntianyi HT03G-1U (GTH3)
+  
+Version 0.1.04
  - Many changes to the web interface
  - Add radar in the webinterface
  - Add more information about a radisonde
