@@ -49,7 +49,6 @@ What this software can do!
 | Huayuntianyi | HT03G-1U (GTH3) | ✅ | ✅ | ✅ | ✅ |
 
 - The C50 has not been tested.
-- The Windsond S1 decoder is very experimental
 
 <p>&nbsp;</p>
 
