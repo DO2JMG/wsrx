@@ -39,7 +39,7 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.05";
+static constexpr const char* APP_VERSION = "0.1.06";
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -432,7 +432,7 @@ static std::optional<ScanDetection> parseDftDetectOutput(const std::string& outp
     ScanDetection det;
     det.frequency_mhz = frequency_mhz;
 
-    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01", "S1", "RD94RD41", "CF6GTH"};
+    const std::vector<std::string> known = {"RS41", "RS92", "DFM", "M10", "M20", "IMET", "LMS6", "MEISEI", "MRZ", "MTS01", "S1", "RD94RD41", "CF6GTH", "C34C50"};
     for (const auto& k : known) {
         if (first_line.find(k) != std::string::npos) {
             det.sonde_type = k;
@@ -1042,10 +1042,11 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     if (cfg.decoder_type_mrz) types.push_back("MRZ");
     if (cfg.decoder_type_mts01) types.push_back("MTS01");
     if (cfg.decoder_type_cf06ht03) types.push_back("CF6GTH");
+    if (cfg.decoder_type_s1) types.push_back("S1");
 
     if (types.empty()) {
         log.warn("config.ini [decoder]: all sonde types disabled, falling back to scanning all types");
-        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92", "LMS6", "MRZ", "MTS01", "CF6GTH"};
+        types = {"RS41", "DFM9", "M10", "IMET4", "MEISEI", "C34C50", "RD94RD41", "RS92", "LMS6", "MRZ", "MTS01", "CF6GTH", "S1"};
     }
 
     std::string out;
@@ -1242,9 +1243,6 @@ struct Channel {
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> reader_exited{false};
     std::thread reader_thread;
-    // Periodically refreshes latest_rssi_db via pollChannelPowerDb() -- see
-    // channelRssiPollThread(). Not started in -wav (offline file) mode,
-    // where there's no live radio to poll.
     std::thread rssi_poll_thread;
     std::mutex state_mutex;
 };

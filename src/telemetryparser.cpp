@@ -10,6 +10,12 @@
 
 namespace {
 
+double normalizeFrequencyToMhz(double v) {
+    if (v >= 1e6) return v / 1e6;
+    if (v > 1000.0) return v / 1000.0;
+    return v;
+}
+
 std::string upperCopy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return s;
@@ -404,6 +410,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (auto v = extractNumber(line, "pressure")) f.pressure_hpa = *v;
     if (auto v = extractNumber(line, "batt")) f.battery_v = *v;
     if (auto v = extractNumber(line, "bt")) f.burstkilltimer_sec = *v;
+    if (auto v = extractNumber(line, "tx_power_raw")) f.tx_power_raw = *v;
     if (auto x = extractString(line, "aux")) f.aux = *x;
 
 
@@ -411,8 +418,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (auto v = extractNumber(line, "sat")) f.sats = static_cast<int>(*v);
     if (auto v = extractNumber(line, "frame")) f.frame = static_cast<int>(*v);
 
-    if (auto v = extractNumber(line, "freq")) f.tx_frequency_mhz = (*v > 1000.0) ? (*v / 1000.0) : *v;
-    if (auto v = extractNumber(line, "tx_frequency")) f.tx_frequency_mhz = (*v > 1000.0) ? (*v / 1000.0) : *v;
+    if (auto v = extractNumber(line, "freq")) f.tx_frequency_mhz = normalizeFrequencyToMhz(*v);
+    if (auto v = extractNumber(line, "tx_frequency")) f.tx_frequency_mhz = normalizeFrequencyToMhz(*v);
 
     if (std::isnan(f.lat) || std::isnan(f.lon) || std::isnan(f.alt_m)) {
         static const std::regex pos_re(

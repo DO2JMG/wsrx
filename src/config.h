@@ -50,6 +50,7 @@ struct Config {
     bool decoder_type_mrz = true;   
     bool decoder_type_mts01 = true;  
     bool decoder_type_cf06ht03 = true; 
+    bool decoder_type_s1 = true; 
 
     bool scan_enabled = true;
     double scan_min_mhz = 400.0;

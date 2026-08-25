@@ -185,6 +185,7 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_mrz = iniBool(ini, "decoder.mrz", cfg.decoder_type_mrz);
     cfg.decoder_type_mts01 = iniBool(ini, "decoder.mts01", cfg.decoder_type_mts01);
     cfg.decoder_type_cf06ht03 = iniBool(ini, "decoder.cf06ht03", cfg.decoder_type_cf06ht03);
+    cfg.decoder_type_s1 = iniBool(ini, "decoder.s1", cfg.decoder_type_s1);
 
     cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);

@@ -60,6 +60,9 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
+// Frequencies need kHz resolution (3 decimals in MHz), 1 decimal (100 kHz
+// steps) is too coarse and causes the uploaded frequency to drift from the
+// actual sonde frequency.
 void addNumber3(std::ostringstream& oss, bool& first, const std::string& key, double value) {
     addComma(oss, first);
     oss << '"' << key << "\":" << std::fixed << std::setprecision(3) << value << std::defaultfloat;
@@ -156,7 +159,7 @@ bool validTypeSerial(const TelemetryFrame& frame) {
     }
 
     if (type == "S1") {
-        static const std::regex s1_serial_re(R"(^S1-s?[0-9]+$)");
+        static const std::regex s1_serial_re(R"(^WS[0-9]+$)");
         return std::regex_match(serial, s1_serial_re);
     }
 
@@ -221,6 +224,7 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     if (!std::isnan(frame.pressure_hpa)) addNumber1(oss, first, "pressure", frame.pressure_hpa);
     if (!std::isnan(frame.battery_v)) addNumber1(oss, first, "voltage", frame.battery_v);
     if (!std::isnan(frame.rssi_db)) addNumber1(oss, first, "rssi", frame.rssi_db);
+    if (!std::isnan(frame.tx_power_raw)) addInt(oss, first, "tx_power", static_cast<int>(std::llround(frame.tx_power_raw)));
     if (!std::isnan(frame.burstkilltimer_sec)) addInt(oss, first, "burstkilltimer", static_cast<int>(std::llround(frame.burstkilltimer_sec)));
     if (!std::isnan(frame.killtimer_sec)) addInt(oss, first, "killtimer", static_cast<int>(std::llround(frame.killtimer_sec)));
     if (frame.sats >= 0) addInt(oss, first, "sat", frame.sats);

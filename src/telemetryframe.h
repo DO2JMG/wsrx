@@ -28,6 +28,9 @@ struct TelemetryFrame {
     int frame = -1;
     int sats = -1;
     double rssi_db = NAN;
+    // Raw sonde-internal tx power code from rs41mod's "tx_power_raw" JSON
+    // field (STATUS block byte, not a calibrated dBm value -- see rs41mod.c).
+    double tx_power_raw = NAN;
 
     std::time_t timestamp = 0;
     std::string timestamp_hhmmss;
