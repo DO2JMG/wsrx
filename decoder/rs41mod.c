@@ -1,4 +1,3 @@
-
 /*
  *  rs41
  *  sync header: correlation/matched filter
@@ -25,22 +24,9 @@
   #include <io.h>
 #endif
 
-// optional JSON "version"
-//  (a) set global
-//      gcc -DVERSION_JSN [-I<inc_dir>] ...
 #ifdef VERSION_JSN
   #include "version_jsn.h"
 #endif
-// or
-//  (b) set local compiler option, e.g.
-//      gcc -DVER_JSN_STR=\"0.0.2\" ...
-
-
-//typedef unsigned char  ui8_t;
-//typedef unsigned short ui16_t;
-//typedef unsigned int   ui32_t;
-//typedef short i16_t;
-//typedef int   i32_t;
 
 #include "demod_mod.h"
 
@@ -83,10 +69,6 @@ static rscfg_t cfg_rs41 = { 41, (320-56)/2, 56, 8, 8, 320}; // const: msgpos, pa
 #define NDATA_LEN 320                    // std framelen 320
 #define XDATA_LEN 198
 #define FRAME_LEN (NDATA_LEN+XDATA_LEN)  // max framelen 518
-/*
-ui8_t //xframe[FRAME_LEN] = { 0x10, 0xB6, 0xCA, 0x11, 0x22, 0x96, 0x12, 0xF8},    = xorbyte( frame)
-         frame[FRAME_LEN] = { 0x86, 0x35, 0xf4, 0x40, 0x93, 0xdf, 0x1a, 0x60}; // = xorbyte(xframe)
-*/
 
 typedef struct {
     float frm_bytescore[FRAME_LEN+8];
@@ -146,6 +128,8 @@ typedef struct {
     ui32_t freq;    // freq/kHz (RS41)
     int jsn_freq;   // freq/kHz (SDR)
     float batt;     // battery voltage (V)
+    int txpower;    // raw tx power byte (STATUS block, RS41_BLOCK_TXPOWER)
+    ui8_t txpower_valid;
     ui16_t conf_fw; // firmware
     ui16_t conf_kt; // kill timer (sec)
     ui16_t conf_bt; // burst timer (sec)
@@ -340,6 +324,8 @@ GPS chip: ublox UBX-G6010-ST
 #define pos_FrameNb     0x03B  // 2 byte
 #define pos_BattVolts   0x045  // 2 byte
 #define pos_SondeID     0x03D  // 8 byte
+#define pos_TXpower     0x050  // 1 byte, raw tx power code
+#define pos_CPUtemp     0x04B  // 1 byte, signed CPU temperature (deg C)
 #define pos_CalData     0x052  // 1 byte, counter 0x00..0x32
 #define pos_Calfreq     0x055  // 2 byte, calfr 0x00
 #define pos_Calburst    0x05E  // 1 byte, calfr 0x02
@@ -454,6 +440,12 @@ static int get_BattVolts(gpx_t *gpx, int ofs) {
     return 0;
 }
 
+static int get_TXpower(gpx_t *gpx, int ofs) {
+    gpx->txpower = gpx->frame[pos_TXpower+ofs];
+    gpx->txpower_valid = 1;
+    return 0;
+}
+
 static int get_SondeID(gpx_t *gpx, int crc, int ofs) {
     int i;
     unsigned byte;
@@ -519,6 +511,7 @@ static int get_FrameConf(gpx_t *gpx, int ofs) {
     err |= get_SondeID(gpx, crc, ofs);
     err |= get_FrameNb(gpx, crc, ofs);
     err |= get_BattVolts(gpx, ofs);
+    err |= get_TXpower(gpx, ofs);
 
     if (crc == 0) {
         calfr = gpx->frame[pos_CalData+ofs];
@@ -628,10 +621,6 @@ static float get_T(gpx_t *gpx, ui32_t f, ui32_t f1, ui32_t f2, float *ptu_co, fl
     return T; // [Celsius]
 }
 
-// rel.hum., capacitor
-// (data:) ftp://ftp-cdc.dwd.de/climate_environment/CDC/observations_germany/radiosondes/
-// (diffAlt: Ellipsoid-Geoid)
-// (note: humidity sensor has significant time-lag at low temperatures)
 static float get_RHemp(gpx_t *gpx, ui32_t f, ui32_t f1, ui32_t f2, float T) {
     float a0 = 7.5;                    // empirical
     float a1 = 350.0/gpx->ptu_calH[0]; // empirical
@@ -2307,6 +2296,10 @@ static int print_position(gpx_t *gpx, int ec) {
                         fprintf(stdout, "{ \"type\": \"%s\"", "RS41");
                         fprintf(stdout, ", \"frame\": %d, \"id\": \"%s\", \"datetime\": \"%04d-%02d-%02dT%02d:%02d:%06.3fZ\", \"lat\": %.5f, \"lon\": %.5f, \"alt\": %.5f, \"vel_h\": %.5f, \"heading\": %.5f, \"vel_v\": %.5f, \"sats\": %d, \"bt\": %d, \"batt\": %.2f",
                                        gpx->frnr, gpx->id, gpx->jahr, gpx->monat, gpx->tag, gpx->std, gpx->min, gpx->sek, gpx->lat, gpx->lon, gpx->alt, gpx->vH, gpx->vD, gpx->vV, gpx->numSV, gpx->conf_cd, gpx->batt );
+                        if (gpx->txpower_valid) {
+                            // raw STATUS-block byte, not a calibrated dBm value (see get_TXpower())
+                            fprintf(stdout, ", \"tx_power_raw\": %d", gpx->txpower );
+                        }
                         if (gpx->option.ptu && !err0) {
                             float _RH = gpx->RH;
                             if (gpx->option.ptu == 2) _RH = gpx->RH2;
@@ -3007,4 +3000,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
