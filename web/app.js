@@ -7,6 +7,29 @@ let activeChannelFreqs = [];
 let spectrumAxisMinP = null;
 let spectrumAxisMaxP = null;
 
+let sondeMap = null;
+let sondeMapLayers = new Map(); // serial -> { line: L.Polyline, marker: L.CircleMarker }
+let sondeMapPredictionLayers = new Map(); // serial -> { line: L.Polyline, marker: L.CircleMarker|null }
+let sondeMapLaunchLayers = new Map(); // serial -> L.Marker (first track point)
+let sondeMapBurstLayers = new Map(); // serial -> L.Marker (highest track point so far)
+let sondeMapBoundsFitted = false;
+let lastMapRefresh = 0;
+let lastSondesData = []; // most recent sondes[] from /api/radiosondes, used by the azel box
+let mapAzElSerial = null; // serial the azel overlay is currently showing, or null when hidden
+let mapAzElInterval = null;
+const MAP_HOURS = 12;
+const MAP_REFRESH_MS = 5000;
+const PREDICTION_COLOR = '#385b80';
+
+// A sonde counts as "live" while its last received frame is younger than
+// this - same freshness window the balloon label already uses to switch
+// its altitude line from blue to red.
+const SONDE_FRESH_MAX_AGE_SEC = 180;
+
+const MAP_LIVE_ONLY_KEY = 'wettersonde-map-live-only';
+let mapLiveOnly = false;
+try { mapLiveOnly = localStorage.getItem(MAP_LIVE_ONLY_KEY) === '1'; } catch (e) {}
+
 const THEME_KEY = 'wettersonde-theme';
 
 function getThemeColor(varName, fallback) {
@@ -502,6 +525,433 @@ async function refreshCpu() {
   }
 }
 
+// ---- Map ----
+
+const TRACK_COLOR = '#0f6799';
+let sondeIcon = null;
+let predictionIcon = null;
+let launchIcon = null;
+let burstIcon = null;
+
+function initSondeMap() {
+  if (sondeMap || typeof L === 'undefined') return;
+  const container = document.getElementById('sondeMap');
+  if (!container) return;
+  sondeMap = L.map('sondeMap').setView([52, 8], 7);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(sondeMap);
+  sondeIcon = L.icon({
+    iconUrl: 'ballon.png',
+    iconSize: [16, 21],
+    iconAnchor: [7, 18],
+    popupAnchor: [1, 1]
+  });
+  // Same icon + geometry wettersonde.net uses for its own predictionIcon.
+  predictionIcon = L.icon({
+    iconUrl: 'target.png',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [1, 1]
+  });
+  // First-frame marker: same inline-SVG "triangleIcon" wettersonde.net uses
+  // for its own "sondeFirst" track marker (src/ws_icon.js) -- same size,
+  // colors and anchor, ported 1:1 rather than approximated with CSS.
+  launchIcon = L.icon({
+    iconUrl:
+      'data:image/svg+xml;utf8,' +
+      encodeURIComponent(
+        '<svg width="13" height="13" viewBox="0 0 13 13" xmlns="http://www.w3.org/2000/svg">' +
+        '<polygon points="6.5,12 1,1 12,1" fill="#678eb9" stroke="#436c98" stroke-width="1"/>' +
+        '</svg>'
+      ),
+    iconSize: [13, 13],
+    iconAnchor: [6.5, 13],
+    popupAnchor: [0, -13]
+  });
+  // Burst marker: same icon geometry as wettersonde.net's burstIcon
+  // (images/pop-marker.png, 15x15, anchor 7,7) but using the user's own
+  // burst.png, shipped alongside app.js/style.css.
+  burstIcon = L.icon({
+    iconUrl: 'burst.png',
+    iconSize: [15, 15],
+    iconAnchor: [7, 7],
+    popupAnchor: [1, 1],
+    className: 'sonde-burst-icon'
+  });
+
+  initMapLiveFilterButton();
+  initMapFullscreenButton();
+  initMapAzElBox();
+}
+
+// ---- Map fullscreen ----
+
+function initMapFullscreenButton() {
+  const btn = document.getElementById('mapFullscreenBtn');
+  const wrap = document.querySelector('#mapview .map-wrap');
+  if (!btn || !wrap) return;
+  const requestFs = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+  const exitFs = document.exitFullscreen || document.webkitExitFullscreen;
+  if (!requestFs || !exitFs) { btn.style.display = 'none'; return; }
+
+  const isFullscreen = () =>
+    document.fullscreenElement === wrap || document.webkitFullscreenElement === wrap;
+
+  const update = () => {
+    const fs = isFullscreen();
+    btn.textContent = fs ? 'Exit fullscreen' : 'Fullscreen';
+    btn.setAttribute('aria-pressed', fs ? 'true' : 'false');
+    if (sondeMap) setTimeout(() => sondeMap.invalidateSize(), 150);
+  };
+
+  btn.addEventListener('click', () => {
+    if (isFullscreen()) {
+      exitFs.call(document);
+    } else {
+      requestFs.call(wrap);
+    }
+  });
+  document.addEventListener('fullscreenchange', update);
+  document.addEventListener('webkitfullscreenchange', update);
+  update();
+}
+
+// ---- Map azimuth/elevation/distance overlay ----
+// Shown when a sonde marker is selected. Unlike wettersonde.net's own
+// AzElControl (which uses the browser's GPS position as the observer),
+// wsrx already computes distance_km/bearing_deg/elevation_deg server-side
+// relative to the fixed receiver station for every sonde in
+// /api/radiosondes -- so this just displays those values, no client-side
+// geolocation or trig needed.
+
+function initMapAzElBox() {
+  const box = document.getElementById('mapAzElBox');
+  if (!box) return;
+  if (typeof L !== 'undefined') {
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.disableScrollPropagation(box);
+  }
+  const closeBtn = document.getElementById('mapAzElClose');
+  if (closeBtn) closeBtn.addEventListener('click', () => deselectMapSonde());
+  if (sondeMap) sondeMap.on('click', () => deselectMapSonde());
+  if (mapAzElInterval) clearInterval(mapAzElInterval);
+  mapAzElInterval = setInterval(updateMapAzElBox, 1000);
+}
+
+function selectMapSonde(serial) {
+  mapAzElSerial = serial;
+  const box = document.getElementById('mapAzElBox');
+  if (box) box.classList.add('visible');
+  const serialEl = document.getElementById('mapAzElSerial');
+  if (serialEl) serialEl.textContent = serial;
+  updateMapAzElBox();
+}
+
+function deselectMapSonde() {
+  mapAzElSerial = null;
+  const box = document.getElementById('mapAzElBox');
+  if (box) box.classList.remove('visible');
+}
+
+function updateMapAzElBox() {
+  if (!mapAzElSerial) return;
+  const box = document.getElementById('mapAzElBox');
+  if (!box) return;
+
+  const timeEl = document.getElementById('mapAzElTime');
+  if (timeEl) timeEl.textContent = new Date().toISOString().slice(11, 19) + ' UTC';
+
+  const s = lastSondesData.find(x => x.serial === mapAzElSerial);
+  const az = s && Number.isFinite(s.bearing_deg) ? Number(s.bearing_deg) : null;
+  const el = s && Number.isFinite(s.elevation_deg) ? Number(s.elevation_deg) : null;
+  const dist = s && Number.isFinite(s.distance_km) ? Number(s.distance_km) : null;
+
+  const dataEl = document.getElementById('mapAzElData');
+  if (dataEl) {
+    dataEl.innerHTML =
+      '<div class="map-azel-row"><span>Azimuth</span><span>' + (az !== null ? az.toFixed(0) + '°' : '-') + '</span></div>' +
+      '<div class="map-azel-row"><span>Elevation</span><span>' + (el !== null ? el.toFixed(1) + '°' : '-') + '</span></div>' +
+      '<div class="map-azel-row"><span>Distance</span><span>' + (dist !== null ? dist.toFixed(1) + ' km' : '-') + '</span></div>';
+  }
+  const needle = document.getElementById('mapAzElNeedle');
+  if (needle) needle.style.transform = 'rotate(' + (az !== null ? az : 0) + 'deg)';
+}
+
+function updateMapLiveFilterButton(btn) {
+  btn.classList.toggle('active', mapLiveOnly);
+  btn.setAttribute('aria-pressed', mapLiveOnly ? 'true' : 'false');
+}
+
+function initMapLiveFilterButton() {
+  const btn = document.getElementById('mapLiveFilterBtn');
+  if (!btn) return;
+  updateMapLiveFilterButton(btn);
+  btn.addEventListener('click', () => {
+    mapLiveOnly = !mapLiveOnly;
+    try { localStorage.setItem(MAP_LIVE_ONLY_KEY, mapLiveOnly ? '1' : '0'); } catch (e) {}
+    updateMapLiveFilterButton(btn);
+    sondeMapBoundsFitted = false; // re-fit the view to whatever the new filter shows
+    refreshSondeMap();
+  });
+}
+
+function sondeLabelHtml(s) {
+  const freqText = Number.isFinite(s.frequency) ? Number(s.frequency).toFixed(3) + 'MHz' : null;
+  let html = '<b>' + escapeHtml(s.serial) + '</b>' + (freqText ? ' - ' + freqText : '');
+
+  const nowSec = Date.now() / 1000;
+  const stale = Number.isFinite(s.modified) && (nowSec - s.modified) > SONDE_FRESH_MAX_AGE_SEC;
+  const color = stale ? '#900000' : '#436c98';
+  const altText = Number.isFinite(s.last_altitude) ? Number(s.last_altitude).toFixed(1) + 'm' : '-';
+  const vText = Number.isFinite(s.vel_v) ? Number(s.vel_v).toFixed(1) + 'm/s' : '-';
+  const hText = Number.isFinite(s.vel_h) ? (Number(s.vel_h) * 3.6).toFixed(1) + 'km/h' : '-';
+  html += '<br><b><font color="' + color + '">' + altText + '</font> ' + vText + ' ' + hText + '</b>';
+  return html;
+}
+
+function bindSondeInteractivity(marker, serial) {
+  // Clicking a sonde on the map only selects it (shows the azel overlay) --
+  // unlike clicking a row in the radiosonde list, it should NOT open the
+  // detail dialog.
+  marker.on('click', () => selectMapSonde(serial));
+  marker.on('tooltipopen', () => {
+    const tooltip = marker.getTooltip();
+    const el = tooltip && tooltip.getElement();
+    if (!el || el.dataset.sondeClickBound === '1') return;
+    el.dataset.sondeClickBound = '1';
+    L.DomEvent.on(el, 'click', (ev) => {
+      L.DomEvent.stop(ev);
+      selectMapSonde(serial);
+    });
+  });
+}
+
+function renderSondePrediction(s, allPoints) {
+  const pred = s.prediction;
+  const track = pred && Array.isArray(pred.track)
+    ? pred.track.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(p => [p[0], p[1]])
+    : [];
+  if (!track.length) return false;
+
+  allPoints.push(...track);
+  const landing = pred.landing && Number.isFinite(pred.landing.lat) && Number.isFinite(pred.landing.lon)
+    ? [pred.landing.lat, pred.landing.lon]
+    : null;
+  if (landing) allPoints.push(landing);
+
+  const landingTimeText = pred.landing && pred.landing.time ? fmtTime(pred.landing.time) : '-';
+  const landingAltText = pred.landing && Number.isFinite(pred.landing.alt) ? fmtAltitude(pred.landing.alt) : '-';
+  const landingTooltip = '<b>Predicted landing</b><br>' + landingAltText + '<br>' + landingTimeText;
+
+  let entry = sondeMapPredictionLayers.get(s.serial);
+  if (!entry) {
+    const line = L.polyline(track, {
+      color: PREDICTION_COLOR, weight: 2, opacity: 0.85, dashArray: '4, 6'
+    }).addTo(sondeMap);
+    let marker = null;
+    if (landing) {
+      marker = L.marker(landing, { icon: predictionIcon }).addTo(sondeMap);
+      marker.bindTooltip(landingTooltip, { direction: 'top', className: 'balloon-label' });
+    }
+    sondeMapPredictionLayers.set(s.serial, { line, marker });
+  } else {
+    entry.line.setLatLngs(track);
+    if (landing) {
+      if (!entry.marker) {
+        entry.marker = L.marker(landing, { icon: predictionIcon }).addTo(sondeMap);
+      } else {
+        entry.marker.setLatLng(landing);
+      }
+      entry.marker.setTooltipContent(landingTooltip);
+    } else if (entry.marker) {
+      sondeMap.removeLayer(entry.marker);
+      entry.marker = null;
+    }
+  }
+  return true;
+}
+
+// Launch (first track point) and burst (highest-altitude track point so far)
+// markers, same idea as wettersonde.net's own track view. `track` here still
+// carries altitude ([lat, lon, alt|null, time]) -- refreshSondeMap keeps that
+// around for this, unlike the lat/lon-only `latlngs` used for the polyline.
+function renderSondeLaunchBurst(s, track, allPoints) {
+  if (track.length < 2) {
+    const existingLaunch = sondeMapLaunchLayers.get(s.serial);
+    if (existingLaunch) { sondeMap.removeLayer(existingLaunch); sondeMapLaunchLayers.delete(s.serial); }
+    const existingBurst = sondeMapBurstLayers.get(s.serial);
+    if (existingBurst) { sondeMap.removeLayer(existingBurst); sondeMapBurstLayers.delete(s.serial); }
+    return false;
+  }
+
+  const launch = track[0];
+  // Only treat this as a burst once the sonde is actually falling -- while
+  // still ascending, the highest point so far is just "current altitude"
+  // and showing the burst icon there would be misleading.
+  const falling = Number.isFinite(s.vel_v) && s.vel_v < 0;
+  let burst = null;
+  if (falling) {
+    for (const p of track) {
+      if (Number.isFinite(p[2]) && (!burst || p[2] > burst[2])) burst = p;
+    }
+  }
+
+  const launchLatLng = [launch[0], launch[1]];
+  allPoints.push(launchLatLng);
+  const launchAltText = Number.isFinite(launch[2]) ? fmtAltitude(launch[2]) : '-';
+  const launchTimeText = launch[3] ? fmtTime(launch[3]) : '-';
+  const launchTooltip = '<b>First position</b><br>at altitude ' + launchAltText + '<br>' + launchTimeText;
+
+  let launchMarker = sondeMapLaunchLayers.get(s.serial);
+  if (!launchMarker) {
+    launchMarker = L.marker(launchLatLng, { icon: launchIcon }).addTo(sondeMap);
+    launchMarker.bindTooltip(launchTooltip, { direction: 'top', className: 'balloon-label' });
+    sondeMapLaunchLayers.set(s.serial, launchMarker);
+  } else {
+    launchMarker.setLatLng(launchLatLng);
+    launchMarker.setTooltipContent(launchTooltip);
+  }
+
+  if (burst) {
+    const burstLatLng = [burst[0], burst[1]];
+    allPoints.push(burstLatLng);
+    const burstAltText = fmtAltitude(burst[2]);
+    const burstTimeText = burst[3] ? fmtTime(burst[3]) : '-';
+    const burstTooltip = '<b>Burst</b><br>at altitude ' + burstAltText + '<br>' + burstTimeText;
+
+    let burstMarker = sondeMapBurstLayers.get(s.serial);
+    if (!burstMarker) {
+      burstMarker = L.marker(burstLatLng, { icon: burstIcon }).addTo(sondeMap);
+      burstMarker.bindTooltip(burstTooltip, { direction: 'top', className: 'balloon-label' });
+      sondeMapBurstLayers.set(s.serial, burstMarker);
+    } else {
+      burstMarker.setLatLng(burstLatLng);
+      burstMarker.setTooltipContent(burstTooltip);
+    }
+  } else {
+    const existingBurst = sondeMapBurstLayers.get(s.serial);
+    if (existingBurst) { sondeMap.removeLayer(existingBurst); sondeMapBurstLayers.delete(s.serial); }
+  }
+
+  return true;
+}
+
+async function refreshSondeMap() {
+  if (!sondeMap) return;
+  let data;
+  try {
+    data = await getJson('/api/radiosondes?hours=' + MAP_HOURS + '&tracks=1');
+  } catch (e) {
+    return;
+  }
+
+  let sondes = Array.isArray(data.radiosondes) ? data.radiosondes : [];
+  lastSondesData = sondes;
+  const totalCount = sondes.length;
+  if (mapLiveOnly) {
+    const nowSec = Date.now() / 1000;
+    sondes = sondes.filter(s => Number.isFinite(s.modified) && (nowSec - s.modified) <= SONDE_FRESH_MAX_AGE_SEC);
+  }
+  const seen = new Set();
+  const predSeen = new Set();
+  const launchBurstSeen = new Set();
+  const allPoints = [];
+
+  for (const s of sondes) {
+    if (!s.serial) continue;
+
+    // Keep altitude/time here (needed for the launch/burst markers below);
+    // `latlngs` below is the lat/lon-only view the polyline/bounds use.
+    const track = Array.isArray(s.track)
+      ? s.track.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(p => [p[0], p[1], p[2], p[3]])
+      : [];
+    let latlngs = track.map(p => [p[0], p[1]]);
+    if (!latlngs.length && Number.isFinite(s.last_latitude) && Number.isFinite(s.last_longitude)) {
+      latlngs = [[s.last_latitude, s.last_longitude]];
+    }
+    if (latlngs.length) {
+      seen.add(s.serial);
+      allPoints.push(...latlngs);
+
+      const last = latlngs[latlngs.length - 1];
+      const labelHtml = sondeLabelHtml(s);
+      let entry = sondeMapLayers.get(s.serial);
+      if (!entry) {
+        const line = L.polyline(latlngs, { color: TRACK_COLOR, weight: 2, opacity: 0.8 }).addTo(sondeMap);
+        const marker = L.marker(last, { icon: sondeIcon }).addTo(sondeMap);
+        marker.bindTooltip(labelHtml, {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -20],
+          opacity: 0.8,
+          className: 'balloon-label',
+          interactive: true
+        });
+        bindSondeInteractivity(marker, s.serial);
+        entry = { line, marker };
+        sondeMapLayers.set(s.serial, entry);
+      } else {
+        entry.line.setLatLngs(latlngs);
+        entry.marker.setLatLng(last);
+        entry.marker.setTooltipContent(labelHtml);
+      }
+    }
+
+    if (renderSondePrediction(s, allPoints)) predSeen.add(s.serial);
+    if (renderSondeLaunchBurst(s, track, allPoints)) launchBurstSeen.add(s.serial);
+  }
+
+  for (const [serial, entry] of sondeMapLayers) {
+    if (!seen.has(serial)) {
+      sondeMap.removeLayer(entry.line);
+      sondeMap.removeLayer(entry.marker);
+      sondeMapLayers.delete(serial);
+    }
+  }
+
+  for (const [serial, entry] of sondeMapPredictionLayers) {
+    if (!predSeen.has(serial)) {
+      sondeMap.removeLayer(entry.line);
+      if (entry.marker) sondeMap.removeLayer(entry.marker);
+      sondeMapPredictionLayers.delete(serial);
+    }
+  }
+
+  for (const [serial, marker] of sondeMapLaunchLayers) {
+    if (!launchBurstSeen.has(serial)) {
+      sondeMap.removeLayer(marker);
+      sondeMapLaunchLayers.delete(serial);
+    }
+  }
+  for (const [serial, marker] of sondeMapBurstLayers) {
+    if (!launchBurstSeen.has(serial)) {
+      sondeMap.removeLayer(marker);
+      sondeMapBurstLayers.delete(serial);
+    }
+  }
+
+  if (!sondeMapBoundsFitted && allPoints.length) {
+    sondeMap.fitBounds(allPoints, { padding: [30, 30], maxZoom: 12 });
+    sondeMapBoundsFitted = true;
+  }
+
+  updateMapAzElBox();
+
+  const info = document.getElementById('mapInfo');
+  if (info) {
+    if (!totalCount) {
+      info.textContent = 'No radiosondes received in the last ' + MAP_HOURS + ' hours';
+    } else if (mapLiveOnly) {
+      info.textContent = 'Showing ' + seen.size + ' live radiosonde(s) (updated within the last '
+        + SONDE_FRESH_MAX_AGE_SEC + 's) · updates automatically';
+    } else {
+      info.textContent = 'Showing ' + seen.size + ' radiosonde(s) from the last ' + MAP_HOURS + ' hours · updates automatically';
+    }
+  }
+}
+
 let lastRadiosondesRefresh = 0;
 
 async function refreshAll() {
@@ -516,6 +966,14 @@ async function refreshAll() {
     if (now - lastRadiosondesRefresh >= 4000) {
       lastRadiosondesRefresh = now;
       await refreshRadiosondesActive();
+    }
+  }
+
+  if (activeTab === 'mapview' && sondeMap) {
+    const now = Date.now();
+    if (now - lastMapRefresh >= MAP_REFRESH_MS) {
+      lastMapRefresh = now;
+      await refreshSondeMap();
     }
   }
 }
@@ -636,6 +1094,12 @@ function showTab(id, btn) {
   if (id === 'radiosondes') {
     lastRadiosondesRefresh = Date.now();
     loadRadiosondesFull();
+  }
+  if (id === 'mapview') {
+    initSondeMap();
+    setTimeout(() => { if (sondeMap) sondeMap.invalidateSize(); }, 0);
+    lastMapRefresh = Date.now();
+    refreshSondeMap();
   }
   if (FILE_EDITORS[id]) loadEditor(id, false);
   refreshAll();
@@ -964,6 +1428,10 @@ const SONDE_DETAIL_ROWS = [
        d.pressure != null ? Number(d.pressure).toFixed(2) + ' hPa' : null], ', ') },
   { label: 'Battery', render: d => d.batt != null ? Number(d.batt).toFixed(2) + ' V' : null },
   { label: 'RSSI', render: d => d.rssi != null ? Number(d.rssi).toFixed(1) + ' dBm' : null },
+  // Raw sonde-internal tx power code from rs41mod's "tx_power_raw" (currently
+  // RS41 only). Not a calibrated dBm value -- rs41mod.c surfaces the raw
+  // STATUS-block byte as-is, so this is shown as a plain code, not "X dBm".
+  { label: 'TX power (raw code)', render: d => d.tx_power_raw != null ? String(d.tx_power_raw) : null },
   { label: 'Burst-kill timer', render: d => {
       const v = d.burstkilltimer != null ? d.burstkilltimer : d.bt;
       return v != null ? v + ' s' : null;
@@ -976,13 +1444,22 @@ const SONDE_DETAIL_ROWS = [
          d.rs41_mainboard_fw != null ? 'FW ' + d.rs41_mainboard_fw : null], ', ');
     } },
   { label: 'Aux data', render: d => fmt1(d.aux) },
+  // Decoded OIF411 (Vaisala ozone interface) XDATA, when the sonde's "aux"
+  // field is a 20-hex-digit OIF411 string (instrument type 5). Same field
+  // layout/scaling as wettersonde.net's own decodeOzoneXdata() (sonde.php).
+  { label: 'Ozone: pump temperature', render: d => d.o3_pump_temperature_c != null ? Number(d.o3_pump_temperature_c).toFixed(2) + ' °C' : null },
+  { label: 'Ozone: sensor current', render: d => d.o3_current_ua != null ? Number(d.o3_current_ua).toFixed(4) + ' µA' : null },
+  { label: 'Ozone: pump current', render: d => d.o3_pump_current_ma != null ? d.o3_pump_current_ma + ' mA' : null },
+  { label: 'Ozone: interface battery', render: d => d.o3_battery_v != null ? Number(d.o3_battery_v).toFixed(1) + ' V' : null },
+  { label: 'Ozone: external voltage', render: d => d.o3_external_v != null ? Number(d.o3_external_v).toFixed(1) + ' V' : null },
 ];
 
 const SONDE_DETAIL_CONSUMED_KEYS = new Set([
   'serial', 'type', 'wsrx_frequency', 'encrypted', 'frame', 'datetime', 'ref_datetime', 'ref_position',
   'first_time', 'modified', 'frames', 'distance_km', 'bearing_deg', 'elevation_deg', 'lat', 'lon', 'first_altitude', 'alt', 'altitude',
   'vel_h', 'heading', 'vel_v', 'sats', 'sat', 'temp', 'humidity', 'pressure', 'batt', 'rssi',
-  'burstkilltimer', 'bt', 'killtimer', 'aux', 'rs41_mainboard', 'rs41_mainboard_fw',
+  'burstkilltimer', 'bt', 'killtimer', 'aux', 'rs41_mainboard', 'rs41_mainboard_fw', 'tx_power_raw',
+  'o3_instrument_number', 'o3_pump_temperature_c', 'o3_current_ua', 'o3_battery_v', 'o3_pump_current_ma', 'o3_external_v',
 ]);
 
 function openSondeDetail(serial) {

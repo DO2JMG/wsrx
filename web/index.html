@@ -15,7 +15,12 @@
       } catch (e) {}
     })();
   </script>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
   <link rel="stylesheet" href="/style.css">
+  <link rel="shortcut icon" href="favicon.ico">
 </head>
 <body>
   <main class="page wrap">
@@ -94,6 +99,7 @@
         <button class="tab" data-tab="whitelist">Whitelist</button>
         <button class="tab" data-tab="blacklist">Blacklist</button>
         <button class="tab" data-tab="radiosondes">Radiosondes</button>
+        <button class="tab" data-tab="mapview">Map</button>
         <button data-action="radar">Radar</button>
       </nav>
 
@@ -150,6 +156,40 @@
       </section>
       <section id="updatelog" class="pane"><pre id="updateLogText">No update has been run yet.</pre></section>
       <section id="rawstatus" class="pane"><pre id="statusText">loading...</pre></section>
+
+      <section id="mapview" class="pane">
+        <div class="row map-toolbar">
+          <div class="muted small" id="mapInfo">Radiosondes from the last 12 hours &middot; updates automatically</div>
+        </div>
+        <div class="map-wrap">
+          <div id="sondeMap"></div>
+          <button id="mapLiveFilterBtn" class="map-filter-btn" type="button" aria-pressed="false">Only live sondes</button>
+          <button id="mapFullscreenBtn" class="map-fullscreen-btn" type="button" aria-pressed="false">Fullscreen</button>
+          <div id="mapAzElBox" class="map-azel-box">
+            <div class="map-azel-head">
+              <span class="map-azel-serial" id="mapAzElSerial">-</span>
+              <button id="mapAzElClose" class="map-azel-close" type="button" aria-label="Close">✕</button>
+            </div>
+            <div class="map-azel-time" id="mapAzElTime">-</div>
+            <div class="map-azel-body">
+              <div class="map-azel-compass">
+                <span class="map-azel-dir map-azel-dir-n">N</span>
+                <span class="map-azel-dir map-azel-dir-e">E</span>
+                <span class="map-azel-dir map-azel-dir-s">S</span>
+                <span class="map-azel-dir map-azel-dir-w">W</span>
+                <div class="map-azel-needle" id="mapAzElNeedle"></div>
+                <div class="map-azel-needle-dot"></div>
+              </div>
+              <div class="map-azel-data" id="mapAzElData">
+                <div class="map-azel-row"><span>Azimuth</span><span>-</span></div>
+                <div class="map-azel-row"><span>Elevation</span><span>-</span></div>
+                <div class="map-azel-row"><span>Distance</span><span>-</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </section>
   </main>
 
@@ -183,5 +223,7 @@
   </dialog>
 
   <script src="/app.js"></script>
+
+
 </body>
 </html>
