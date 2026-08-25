@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <cctype>
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
@@ -28,6 +29,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <array>
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -642,8 +644,450 @@ static std::optional<std::string> getLaunchsiteCached(const std::string &serial)
     return std::nullopt;
 }
 
-static std::string radiosondes_json(const App &app, long long max_age_sec) {
+static std::optional<std::string> json_parse_string_at(const std::string &s, size_t &pos) {
+    if (pos >= s.size() || s[pos] != '"') return std::nullopt;
+    size_t p = pos + 1;
+    std::string out;
+    for (; p < s.size(); ++p) {
+        char c = s[p];
+        if (c == '"') { pos = p + 1; return out; }
+        if (c != '\\' || p + 1 >= s.size()) {
+            out.push_back(c);
+            continue;
+        }
+
+        size_t up = p;
+        if (auto cp = read_unicode_escape(s, up)) {
+            unsigned int codepoint = *cp;
+            if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                size_t np = up + 1;
+                if (auto low = read_unicode_escape(s, np); low && *low >= 0xDC00 && *low <= 0xDFFF) {
+                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (*low - 0xDC00);
+                    up = np;
+                }
+            }
+            append_utf8(out, codepoint);
+            p = up;
+            continue;
+        }
+
+        char next = s[p + 1];
+        switch (next) {
+            case 'n': out.push_back('\n'); break;
+            case 't': out.push_back('\t'); break;
+            case 'r': out.push_back('\r'); break;
+            case 'b': out.push_back('\b'); break;
+            case 'f': out.push_back('\f'); break;
+            case '/': out.push_back('/'); break;
+            default: out.push_back(next); break; // handles \" \\ etc.
+        }
+        ++p;
+    }
+    return std::nullopt; // unterminated string
+}
+
+struct JsonValue {
+    enum class Type { Null, Bool, Number, String, Array, Object } type = Type::Null;
+    bool b = false;
+    double num = 0.0;
+    std::string str;
+    std::vector<JsonValue> arr;
+    std::map<std::string, JsonValue> obj;
+
+    bool isArray() const { return type == Type::Array; }
+    bool isObject() const { return type == Type::Object; }
+    bool isNumber() const { return type == Type::Number; }
+    bool isString() const { return type == Type::String; }
+
+    const JsonValue *get(const std::string &key) const {
+        if (type != Type::Object) return nullptr;
+        auto it = obj.find(key);
+        return it == obj.end() ? nullptr : &it->second;
+    }
+};
+
+class JsonParser {
+public:
+    explicit JsonParser(const std::string &s) : s_(s) {}
+
+    std::optional<JsonValue> parse() {
+        skipWs();
+        return parseValue();
+    }
+
+private:
+    const std::string &s_;
+    size_t p_ = 0;
+
+    void skipWs() {
+        while (p_ < s_.size() && std::isspace(static_cast<unsigned char>(s_[p_]))) ++p_;
+    }
+
+    std::optional<JsonValue> parseValue() {
+        skipWs();
+        if (p_ >= s_.size()) return std::nullopt;
+        char c = s_[p_];
+        if (c == '{') return parseObject();
+        if (c == '[') return parseArray();
+        if (c == '"') return parseStringValue();
+        if (c == 't' || c == 'f') return parseBool();
+        if (c == 'n') return parseNull();
+        return parseNumber();
+    }
+
+    std::optional<JsonValue> parseStringValue() {
+        auto str = json_parse_string_at(s_, p_);
+        if (!str) return std::nullopt;
+        JsonValue v;
+        v.type = JsonValue::Type::String;
+        v.str = *str;
+        return v;
+    }
+
+    std::optional<JsonValue> parseBool() {
+        if (s_.compare(p_, 4, "true") == 0) { p_ += 4; JsonValue v; v.type = JsonValue::Type::Bool; v.b = true; return v; }
+        if (s_.compare(p_, 5, "false") == 0) { p_ += 5; JsonValue v; v.type = JsonValue::Type::Bool; v.b = false; return v; }
+        return std::nullopt;
+    }
+
+    std::optional<JsonValue> parseNull() {
+        if (s_.compare(p_, 4, "null") == 0) { p_ += 4; JsonValue v; v.type = JsonValue::Type::Null; return v; }
+        return std::nullopt;
+    }
+
+    std::optional<JsonValue> parseNumber() {
+        size_t start = p_;
+        if (p_ < s_.size() && (s_[p_] == '-' || s_[p_] == '+')) ++p_;
+        while (p_ < s_.size() && (std::isdigit(static_cast<unsigned char>(s_[p_])) || s_[p_] == '.' ||
+               s_[p_] == 'e' || s_[p_] == 'E' || s_[p_] == '+' || s_[p_] == '-')) ++p_;
+        if (p_ == start) return std::nullopt;
+        try {
+            JsonValue v;
+            v.type = JsonValue::Type::Number;
+            v.num = std::stod(s_.substr(start, p_ - start));
+            return v;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    std::optional<JsonValue> parseArray() {
+        ++p_; // consume '['
+        JsonValue v;
+        v.type = JsonValue::Type::Array;
+        skipWs();
+        if (p_ < s_.size() && s_[p_] == ']') { ++p_; return v; }
+        while (true) {
+            auto elem = parseValue();
+            if (!elem) return std::nullopt;
+            v.arr.push_back(std::move(*elem));
+            skipWs();
+            if (p_ < s_.size() && s_[p_] == ',') { ++p_; continue; }
+            if (p_ < s_.size() && s_[p_] == ']') { ++p_; break; }
+            return std::nullopt;
+        }
+        return v;
+    }
+
+    std::optional<JsonValue> parseObject() {
+        ++p_; // consume '{'
+        JsonValue v;
+        v.type = JsonValue::Type::Object;
+        skipWs();
+        if (p_ < s_.size() && s_[p_] == '}') { ++p_; return v; }
+        while (true) {
+            skipWs();
+            if (p_ >= s_.size() || s_[p_] != '"') return std::nullopt;
+            auto key = json_parse_string_at(s_, p_);
+            if (!key) return std::nullopt;
+            skipWs();
+            if (p_ >= s_.size() || s_[p_] != ':') return std::nullopt;
+            ++p_;
+            auto val = parseValue();
+            if (!val) return std::nullopt;
+            v.obj[*key] = std::move(*val);
+            skipWs();
+            if (p_ < s_.size() && s_[p_] == ',') { ++p_; continue; }
+            if (p_ < s_.size() && s_[p_] == '}') { ++p_; break; }
+            return std::nullopt;
+        }
+        return v;
+    }
+};
+
+struct SondeFrame {
+    double lat = std::numeric_limits<double>::quiet_NaN();
+    double lon = std::numeric_limits<double>::quiet_NaN();
+    double alt = std::numeric_limits<double>::quiet_NaN();
+    double v_speed = std::numeric_limits<double>::quiet_NaN();
+    std::string datetime;
+};
+
+static std::vector<SondeFrame> load_sonde_frames(const App &app, const std::string &serial_raw) {
+    std::vector<SondeFrame> frames;
+    const std::string serial = sanitize_serial(serial_raw);
+    const std::string path = app.sondes_dir + "/" + serial + ".json";
+    std::ifstream f(path);
+    if (!f) return frames;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.find('{') == std::string::npos) continue;
+        SondeFrame fr;
+        if (auto v = extract_json_number(line, "lat")) fr.lat = *v;
+        else if (auto v2 = extract_json_number(line, "latitude")) fr.lat = *v2;
+        if (auto v = extract_json_number(line, "lon")) fr.lon = *v;
+        else if (auto v2 = extract_json_number(line, "longitude")) fr.lon = *v2;
+        if (auto v = extract_json_number(line, "alt")) fr.alt = *v;
+        else if (auto v2 = extract_json_number(line, "altitude")) fr.alt = *v2;
+        if (auto v = extract_json_number(line, "vel_v")) fr.v_speed = *v;
+        if (auto v = extract_json_string(line, "datetime")) fr.datetime = *v;
+        else if (auto v2 = extract_json_string(line, "time")) fr.datetime = *v2;
+        frames.push_back(std::move(fr));
+    }
+    return frames;
+}
+
+static bool sonde_is_descending(const std::vector<SondeFrame> &frames) {
+    if (frames.empty()) return false;
+
+    size_t start = frames.size() > 6 ? frames.size() - 6 : 0;
+    double firstAlt = std::numeric_limits<double>::quiet_NaN();
+    double lastAlt = std::numeric_limits<double>::quiet_NaN();
+    int seen = 0;
+    for (size_t i = start; i < frames.size(); ++i) {
+        if (!std::isfinite(frames[i].alt)) continue;
+        if (!std::isfinite(firstAlt)) firstAlt = frames[i].alt;
+        lastAlt = frames[i].alt;
+        ++seen;
+    }
+    if (seen >= 2 && std::isfinite(firstAlt) && std::isfinite(lastAlt)) {
+        return lastAlt < firstAlt - 1.0;
+    }
+    if (std::isfinite(frames.back().v_speed)) return frames.back().v_speed < 0;
+    return false;
+}
+
+static double burst_descent_factor(double burst_calc) {
+    double f = 0.0;
+    if (burst_calc < 30000) f = ((burst_calc - 20000) * (0.15 - 0.3) / (30000 - 20000)) + 0.3;
+    if (burst_calc < 20000) f = ((burst_calc - 10000) * (0.3 - 0.5) / (20000 - 10000)) + 0.5;
+    if (burst_calc < 10000) f = ((burst_calc - 8000) * (0.5 - 0.6) / (10000 - 8000)) + 0.6;
+    if (burst_calc < 8000)  f = ((burst_calc - 6000) * (0.6 - 0.75) / (8000 - 6000)) + 0.75;
+    if (burst_calc < 6000)  f = ((burst_calc - 3000) * (0.75 - 0.95) / (6000 - 3000)) + 0.95;
+    if (burst_calc < 3000)  f = ((burst_calc - 2000) * (0.95 - 0.98) / (3000 - 2000)) + 0.98;
+    if (burst_calc < 2000)  f = (burst_calc - 1000) * (0.98 - 1) / (2000 - 1000) + 1;
+    return f;
+}
+
+static std::string predict_cache_path(const App &app, const std::string &serial) {
+    return app.base_dir + "/data/prediction/" + sanitize_serial(serial) + ".json";
+}
+
+static void update_prediction_for_sonde(const App &app, const std::string &serial) {
+    auto frames = load_sonde_frames(app, serial);
+    if (frames.empty()) return;
+    const SondeFrame &last = frames.back();
+    if (!std::isfinite(last.lat) || !std::isfinite(last.lon) || !std::isfinite(last.alt) || !std::isfinite(last.v_speed)) return;
+    if (last.alt >= 25000.0) return; // matches realtime.php's $predictionMaxAltitude
+    if (!sonde_is_descending(frames)) return;
+
+    double longitude = last.lon < 0 ? last.lon + 360.0 : last.lon;
+    double burst_calc = last.alt - 42.0;
+    double burst_faktor = burst_descent_factor(burst_calc);
+    double v_speed_abs = std::abs(std::round(last.v_speed));
+
+    double ascent_rate_req = std::max(0.1, v_speed_abs);
+    double descent_rate_req = std::max(0.1, std::round(v_speed_abs * burst_faktor));
+    double burst_altitude_req = std::max(200.0, std::round(burst_calc));
+    double launch_altitude_req = std::max(0.0, std::round(last.alt - 49.0));
+
+    char dtbuf[64];
+    time_t t = time(nullptr);
+    struct tm tm{};
+    gmtime_r(&t, &tm);
+    strftime(dtbuf, sizeof(dtbuf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+
+    std::ostringstream q;
+    q << "https://predict.wettersonde.net/?launch_latitude=" << std::fixed << std::setprecision(6) << last.lat
+      << "&launch_longitude=" << longitude
+      << "&launch_altitude=" << std::setprecision(0) << launch_altitude_req
+      << "&launch_datetime=" << dtbuf
+      << "&ascent_rate=" << std::setprecision(2) << ascent_rate_req
+      << "&burst_altitude=" << std::setprecision(0) << burst_altitude_req
+      << "&descent_rate=" << std::setprecision(2) << descent_rate_req;
+
+    std::string body = run_cmd("curl -fsS -m 15 " + shell_quote(q.str()));
+    if (body.empty()) return;
+
+    JsonParser parser(body);
+    auto parsed = parser.parse();
+    if (!parsed || !parsed->isObject() || !parsed->get("prediction") || !parsed->get("prediction")->isArray()) {
+        std::cerr << "wsrx-web: prediction request failed for " << serial << " (query=" << q.str() << ")\n";
+        return;
+    }
+
+    write_file_atomic(predict_cache_path(app, serial), body);
+}
+
+struct PredictionOutput {
+    std::vector<std::array<double, 3>> track; // lat, lon, alt (all stages, ascent+descent)
+    bool has_landing = false;
+    double landing_lat = std::numeric_limits<double>::quiet_NaN();
+    double landing_lon = std::numeric_limits<double>::quiet_NaN();
+    double landing_alt = std::numeric_limits<double>::quiet_NaN();
+    std::string landing_time;
+};
+
+static std::optional<PredictionOutput> extract_prediction_output(const JsonValue &root) {
+    const JsonValue *stages = root.get("prediction");
+    if (!stages || !stages->isArray()) return std::nullopt;
+
+    PredictionOutput out;
+
+    for (const auto &stage : stages->arr) {
+        const JsonValue *traj = stage.get("trajectory");
+        if (!traj || !traj->isArray()) continue;
+        for (const auto &pt : traj->arr) {
+            const JsonValue *lat = pt.get("latitude");
+            const JsonValue *lon = pt.get("longitude");
+            const JsonValue *alt = pt.get("altitude");
+            if (!lat || !lon || !lat->isNumber() || !lon->isNumber()) continue;
+            double lo = lon->num;
+            if (lo > 180) lo -= 360;
+            double al = (alt && alt->isNumber()) ? alt->num : std::numeric_limits<double>::quiet_NaN();
+            out.track.push_back({lat->num, lo, al});
+        }
+    }
+
+    for (const auto &stage : stages->arr) {
+        const JsonValue *stageName = stage.get("stage");
+        if (!stageName || !stageName->isString() || stageName->str != "descent") continue;
+        const JsonValue *traj = stage.get("trajectory");
+        if (!traj || !traj->isArray() || traj->arr.empty()) continue;
+        const JsonValue &pt = traj->arr.back();
+        const JsonValue *lat = pt.get("latitude");
+        const JsonValue *lon = pt.get("longitude");
+        if (lat && lon && lat->isNumber() && lon->isNumber()) {
+            out.has_landing = true;
+            out.landing_lat = lat->num;
+            out.landing_lon = lon->num > 180 ? lon->num - 360 : lon->num;
+            const JsonValue *alt = pt.get("altitude");
+            out.landing_alt = (alt && alt->isNumber()) ? alt->num : std::numeric_limits<double>::quiet_NaN();
+            const JsonValue *dtv = pt.get("datetime");
+            if (dtv && dtv->isString()) out.landing_time = dtv->str;
+        }
+        break;
+    }
+
+    if (out.track.empty()) return std::nullopt;
+    return out;
+}
+
+static std::string prediction_json_for_serial(const App &app, const std::string &serial) {
+    std::string body = read_file_full(predict_cache_path(app, serial), 2 * 1024 * 1024);
+    if (body.empty()) return "null";
+
+    JsonParser parser(body);
+    auto parsed = parser.parse();
+    if (!parsed) return "null";
+    auto out = extract_prediction_output(*parsed);
+    if (!out) return "null";
+
+    std::ostringstream js;
+    js << "{\"track\":[";
+    for (size_t i = 0; i < out->track.size(); ++i) {
+        if (i) js << ",";
+        const auto &p = out->track[i];
+        js << "[" << std::fixed << std::setprecision(6) << p[0] << "," << p[1] << ",";
+        if (std::isfinite(p[2])) js << std::setprecision(1) << p[2]; else js << "null";
+        js << "]";
+    }
+    js << "]";
+    js << ",\"landing\":";
+    if (out->has_landing) {
+        js << "{\"lat\":" << std::fixed << std::setprecision(6) << out->landing_lat
+           << ",\"lon\":" << out->landing_lon
+           << ",\"alt\":";
+        if (std::isfinite(out->landing_alt)) js << std::setprecision(1) << out->landing_alt; else js << "null";
+        js << ",\"time\":\"" << json_escape(out->landing_time) << "\"}";
+    } else {
+        js << "null";
+    }
+    js << "}";
+    return js.str();
+}
+
+static bool serial_is_undecoded(const std::string &serial) {
+    int run = 0;
+    for (unsigned char c : serial) {
+        if (c == 'x' || c == 'X') {
+            if (++run >= 4) return true;
+        } else {
+            run = 0;
+        }
+    }
+    return false;
+}
+
+static void prediction_scheduler_thread(App app) {
     namespace fs = std::filesystem;
+    const long long PREDICTION_ACTIVE_MAX_AGE_SEC = 180;
+    const long long PREDICT_MIN_INTERVAL_SEC = 30;
+
+    while (!g_stop) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        if (g_stop) break;
+
+        std::error_code ec;
+        if (!fs::exists(app.sondes_dir, ec) || !fs::is_directory(app.sondes_dir, ec)) continue;
+
+        const std::time_t now = std::time(nullptr);
+
+        for (const auto &entry : fs::directory_iterator(app.sondes_dir, ec)) {
+            if (ec) break;
+            if (g_stop) break;
+            if (!entry.is_regular_file(ec)) continue;
+            auto path = entry.path();
+            if (path.extension() != ".json") continue;
+
+            std::error_code mtime_ec;
+            auto ftime = entry.last_write_time(mtime_ec);
+            if (mtime_ec) continue;
+            auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+            std::time_t modified = std::chrono::system_clock::to_time_t(sctp);
+            if ((now - modified) > PREDICTION_ACTIVE_MAX_AGE_SEC) continue;
+
+            std::string serial = strip_json_ext(path.filename().string());
+            if (serial_is_undecoded(serial)) continue;
+
+            struct stat cache_st{};
+            std::string cache_path = predict_cache_path(app, serial);
+            bool have_cache = stat(cache_path.c_str(), &cache_st) == 0;
+            if (have_cache && (now - cache_st.st_mtime) < PREDICT_MIN_INTERVAL_SEC) continue;
+
+            update_prediction_for_sonde(app, serial);
+        }
+    }
+}
+
+static bool looksLikeSondeSubtypeName(const std::string& s) {
+    if (s.empty()) return false;
+    for (unsigned char c : s) {
+        if (c < '0' || c > '9') return true;
+    }
+    return false;
+}
+
+static std::string radiosondes_json(const App &app, long long max_age_sec, bool include_track = false) {
+    namespace fs = std::filesystem;
+    struct TrackPoint {
+        double lat;
+        double lon;
+        double alt;
+        std::string time;
+    };
     struct Item {
         std::string serial;
         std::string type;
@@ -655,9 +1099,12 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
         double last_lat = std::numeric_limits<double>::quiet_NaN();
         double last_lon = std::numeric_limits<double>::quiet_NaN();
         double frequency_mhz = std::numeric_limits<double>::quiet_NaN();
+        double last_vel_h = std::numeric_limits<double>::quiet_NaN();
+        double last_vel_v = std::numeric_limits<double>::quiet_NaN();
         uintmax_t size = 0;
         long frames = 0;
         std::time_t modified = 0;
+        std::vector<TrackPoint> track;
     };
 
     std::vector<Item> items;
@@ -676,6 +1123,7 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
 
         Item item;
         item.serial = strip_json_ext(path.filename().string());
+        if (serial_is_undecoded(item.serial)) continue; // e.g. DFM's "Dxxxxxx" placeholder, real serial not decoded yet
         item.size = entry.file_size(ec);
 
         auto ftime = entry.last_write_time(ec);
@@ -693,7 +1141,7 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
         while (std::getline(f, line)) {
             if (line.find('{') == std::string::npos) continue;
             item.frames++;
-            if (auto t = extract_json_string(line, "subtype")) {
+            if (auto t = extract_json_string(line, "subtype"); t && looksLikeSondeSubtypeName(*t)) {
                 item.type = *t;
                 item.type_is_subtype = true;
             } else if (!item.type_is_subtype && item.type.empty()) {
@@ -708,6 +1156,8 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
             auto lon = extract_json_number(line, "lon");
             if (!lon) lon = extract_json_number(line, "longitude");
             auto freq = extract_json_number(line, "wsrx_frequency");
+            auto vel_h = extract_json_number(line, "vel_h");
+            auto vel_v = extract_json_number(line, "vel_v");
 
             if (first_valid) {
                 if (alt) item.first_alt = *alt;
@@ -719,6 +1169,17 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
             if (lat) item.last_lat = *lat;
             if (lon) item.last_lon = *lon;
             if (freq) item.frequency_mhz = *freq;
+            if (vel_h) item.last_vel_h = *vel_h;
+            if (vel_v) item.last_vel_v = *vel_v;
+
+            if (include_track && lat && lon) {
+                TrackPoint tp;
+                tp.lat = *lat;
+                tp.lon = *lon;
+                tp.alt = alt ? *alt : std::numeric_limits<double>::quiet_NaN();
+                tp.time = dt ? *dt : "";
+                item.track.push_back(tp);
+            }
         }
         if (item.frames > 0) items.push_back(item);
     }
@@ -746,6 +1207,10 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
         if (std::isfinite(it.last_lon)) js << std::fixed << std::setprecision(6) << it.last_lon; else js << "null";
         js << ",\"frequency\":";
         if (std::isfinite(it.frequency_mhz)) js << std::fixed << std::setprecision(3) << it.frequency_mhz; else js << "null";
+        js << ",\"vel_h\":";
+        if (std::isfinite(it.last_vel_h)) js << std::fixed << std::setprecision(2) << it.last_vel_h; else js << "null";
+        js << ",\"vel_v\":";
+        if (std::isfinite(it.last_vel_v)) js << std::fixed << std::setprecision(2) << it.last_vel_v; else js << "null";
         js << ",\"distance_km\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) &&
             std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
@@ -781,10 +1246,61 @@ static std::string radiosondes_json(const App &app, long long max_age_sec) {
         } else {
             js << "null";
         }
+        if (include_track) {
+            js << ",\"track\":[";
+            for (size_t j = 0; j < it.track.size(); ++j) {
+                if (j) js << ",";
+                const auto &tp = it.track[j];
+                js << "[" << std::fixed << std::setprecision(6) << tp.lat << "," << tp.lon << ",";
+                if (std::isfinite(tp.alt)) js << std::setprecision(1) << tp.alt; else js << "null";
+                js << ",\"" << json_escape(tp.time) << "\"]";
+            }
+            js << "]";
+            js << ",\"prediction\":" << prediction_json_for_serial(app, it.serial);
+        }
         js << "}";
     }
     js << "]}";
     return js.str();
+}
+
+struct OzoneXdata {
+    int instrument_type = 0;
+    int instrument_number = 0;
+    double pump_temperature_c = 0.0;
+    double ozone_current_ua = 0.0;
+    double battery_voltage_v = 0.0;
+    int pump_current_ma = 0;
+    double external_voltage_v = 0.0;
+};
+
+static std::optional<OzoneXdata> decodeOzoneXdata(const std::string &aux_raw) {
+    std::string x;
+    x.reserve(aux_raw.size());
+    for (unsigned char c : aux_raw) x.push_back(static_cast<char>(std::toupper(c)));
+    while (!x.empty() && std::isspace(static_cast<unsigned char>(x.front()))) x.erase(x.begin());
+    while (!x.empty() && std::isspace(static_cast<unsigned char>(x.back()))) x.pop_back();
+
+    if (x.size() != 20) return std::nullopt;
+    for (unsigned char c : x) {
+        if (!std::isxdigit(c)) return std::nullopt;
+    }
+
+    auto hexAt = [&](size_t pos, size_t len) -> long {
+        return std::strtol(x.substr(pos, len).c_str(), nullptr, 16);
+    };
+
+    OzoneXdata d;
+    d.instrument_type = static_cast<int>(hexAt(0, 2));
+    if (d.instrument_type != 5) return std::nullopt; // only instrument type 5 (OIF411/ozone) is decoded
+
+    d.instrument_number = static_cast<int>(hexAt(2, 2));
+    d.pump_temperature_c = hexAt(4, 4) / 100.0;
+    d.ozone_current_ua = hexAt(8, 5) / 10000.0;
+    d.battery_voltage_v = hexAt(13, 2) / 10.0;
+    d.pump_current_ma = static_cast<int>(hexAt(15, 3));
+    d.external_voltage_v = hexAt(18, 2) / 10.0;
+    return d;
 }
 
 static std::string radiosonde_detail_json(const App &app, const std::string &serial_raw) {
@@ -806,7 +1322,7 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
     static const std::vector<std::string> number_keys = {
         "frame", "lat", "lon", "alt", "altitude", "vel_h", "heading", "vel_v", "sats", "sat",
         "bt", "batt", "temp", "humidity", "pressure", "rssi", "burstkilltimer", "killtimer",
-        "wsrx_frequency", "rs41_mainboard_fw"
+        "wsrx_frequency", "rs41_mainboard_fw", "tx_power_raw"
     };
     bool encrypted = false;
     bool saw_encrypted = false;
@@ -884,6 +1400,24 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
         js << ",\"" << k << "\":";
         if (it != num_fields.end()) js << std::fixed << std::setprecision(6) << it->second << std::defaultfloat;
         else js << "null";
+    }
+
+    {
+        auto aux_it = str_fields.find("aux");
+        std::optional<OzoneXdata> ozone = (aux_it != str_fields.end())
+            ? decodeOzoneXdata(aux_it->second) : std::nullopt;
+        if (ozone) {
+            js << ",\"o3_instrument_number\":" << ozone->instrument_number;
+            js << ",\"o3_pump_temperature_c\":" << std::fixed << std::setprecision(2)
+               << ozone->pump_temperature_c << std::defaultfloat;
+            js << ",\"o3_current_ua\":" << std::fixed << std::setprecision(4)
+               << ozone->ozone_current_ua << std::defaultfloat;
+            js << ",\"o3_battery_v\":" << std::fixed << std::setprecision(1)
+               << ozone->battery_voltage_v << std::defaultfloat;
+            js << ",\"o3_pump_current_ma\":" << ozone->pump_current_ma;
+            js << ",\"o3_external_v\":" << std::fixed << std::setprecision(1)
+               << ozone->external_voltage_v << std::defaultfloat;
+        }
     }
 
     if (num_fields.count("lat") && num_fields.count("lon") &&
@@ -1084,7 +1618,8 @@ static void handle_client(int fd, const App &app) {
         } else if (qm.count("hours")) {
             try { max_age_sec = static_cast<long long>(std::stod(qm["hours"]) * 3600.0); } catch (...) { max_age_sec = 0; }
         }
-        send_response(fd, 200, "application/json", radiosondes_json(app, max_age_sec));
+        bool include_track = qm.count("tracks") && qm["tracks"] != "0" && qm["tracks"] != "false";
+        send_response(fd, 200, "application/json", radiosondes_json(app, max_age_sec, include_track));
     } else if (path == "/api/radiosonde") {
         auto qm = parse_query(query);
         std::string serial = qm.count("serial") ? qm["serial"] : "";
@@ -1219,6 +1754,7 @@ int main(int argc, char **argv) {
     }
 
     std::thread(cpu_monitor_thread, app).detach();
+    std::thread(prediction_scheduler_thread, app).detach();
 
     while (!g_stop) {
         sockaddr_in caddr{};
