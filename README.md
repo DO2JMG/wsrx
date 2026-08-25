@@ -1,3 +1,4 @@
+<img width="1155" height="663" alt="screen" src="https://github.com/user-attachments/assets/a0f2ecb1-7589-4bd7-83b2-406ab165d535" />
 ## wsrx Radiosonde decoder, monitoring, scan and decoder status
 
 With wsrx, you can send radiosonde telemetry to wettersonde.net via API. Radiosondes are automatically detected by the scanner.
@@ -24,6 +25,7 @@ What this software can do!
 
 <img style="display: inline-block;" height="350" alt="screen2" src="https://github.com/user-attachments/assets/70fe3526-ae64-4f2b-879f-f91358f04056" />
 
+<img width="1155" height="663" alt="screen" src="https://github.com/user-attachments/assets/b63f458a-c236-4edd-b573-82482765a05c" />
 
 
 <p>&nbsp;</p>
