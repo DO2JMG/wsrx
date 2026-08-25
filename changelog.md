@@ -1,3 +1,9 @@
+Version 0.1.06
+- Decoding tx power from RS41
+- Decoding aux from ozone
+- Add Map to the webinterface with Prediction
+- Decoders for S1 and RD41 tested live.
+
 Version 0.1.05
 - The config.ini, blacklist.txt, and whitelist.txt files can be edited via the web interface
 - Several changes to the web interface
