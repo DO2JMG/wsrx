@@ -578,6 +578,20 @@ function initSondeMap() {
   initMapLiveFilterButton();
   initMapFullscreenButton();
   initMapAzElBox();
+  initMapResizeObserver(container);
+}
+
+function initMapResizeObserver(container) {
+  if (typeof ResizeObserver === 'undefined') return;
+  let pending = null;
+  const ro = new ResizeObserver(() => {
+    if (pending) return;
+    pending = requestAnimationFrame(() => {
+      pending = null;
+      if (sondeMap) sondeMap.invalidateSize();
+    });
+  });
+  ro.observe(container);
 }
 
 
@@ -596,7 +610,7 @@ function initMapFullscreenButton() {
     const fs = isFullscreen();
     btn.textContent = fs ? 'Exit fullscreen' : 'Fullscreen';
     btn.setAttribute('aria-pressed', fs ? 'true' : 'false');
-    if (sondeMap) setTimeout(() => sondeMap.invalidateSize(), 150);
+    if (sondeMap) sondeMap.invalidateSize();
   };
 
   btn.addEventListener('click', () => {

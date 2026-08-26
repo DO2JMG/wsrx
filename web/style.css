@@ -547,16 +547,54 @@ textarea.editor:focus {
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
 }
 
-.map-wrap:fullscreen,
+/* Absolute-positioning #sondeMap to fill its positioned parent (.map-wrap,
+   which already has position:relative) only needs .map-wrap to have *some*
+   box, which the Fullscreen spec guarantees regardless of display value.
+
+   IMPORTANT: each vendor-prefixed fullscreen pseudo-class is its own,
+   separate rule below, not combined into one comma-separated selector list.
+   A browser that doesn't recognize one selector in a grouped list (e.g.
+   Chrome doesn't know :-moz-full-screen) drops the *entire* rule per the
+   CSS spec -- so grouping them together silently broke this in Chrome the
+   moment :-moz-full-screen was added for Firefox. */
+.map-wrap:fullscreen {
+  background: var(--panel);
+  padding: 0;
+}
 .map-wrap:-webkit-full-screen {
   background: var(--panel);
   padding: 0;
 }
+.map-wrap:-moz-full-screen {
+  background: var(--panel);
+  padding: 0;
+}
 
-.map-wrap:fullscreen #sondeMap,
+/* !important on position is required here: Leaflet writes an inline
+   style="position: relative" onto the map container at init time (see
+   L.Map._initContainer in leaflet-src.js), and an inline style always
+   beats any stylesheet rule regardless of specificity -- only !important
+   in the stylesheet can override it. */
+.map-wrap:fullscreen #sondeMap {
+  position: absolute !important;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
+}
 .map-wrap:-webkit-full-screen #sondeMap {
-  height: 100vh;
-  max-height: 100vh;
+  position: absolute !important;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
+}
+.map-wrap:-moz-full-screen #sondeMap {
+  position: absolute !important;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
 }
 
 /* Azimuth/elevation/distance overlay, shown when a sonde marker is
