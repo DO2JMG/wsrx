@@ -8,22 +8,19 @@ let spectrumAxisMinP = null;
 let spectrumAxisMaxP = null;
 
 let sondeMap = null;
-let sondeMapLayers = new Map(); // serial -> { line: L.Polyline, marker: L.CircleMarker }
-let sondeMapPredictionLayers = new Map(); // serial -> { line: L.Polyline, marker: L.CircleMarker|null }
-let sondeMapLaunchLayers = new Map(); // serial -> L.Marker (first track point)
-let sondeMapBurstLayers = new Map(); // serial -> L.Marker (highest track point so far)
+let sondeMapLayers = new Map();
+let sondeMapPredictionLayers = new Map();
+let sondeMapLaunchLayers = new Map();
+let sondeMapBurstLayers = new Map();
 let sondeMapBoundsFitted = false;
 let lastMapRefresh = 0;
-let lastSondesData = []; // most recent sondes[] from /api/radiosondes, used by the azel box
-let mapAzElSerial = null; // serial the azel overlay is currently showing, or null when hidden
+let lastSondesData = [];
+let mapAzElSerial = null;
 let mapAzElInterval = null;
 const MAP_HOURS = 12;
 const MAP_REFRESH_MS = 5000;
 const PREDICTION_COLOR = '#385b80';
 
-// A sonde counts as "live" while its last received frame is younger than
-// this - same freshness window the balloon label already uses to switch
-// its altitude line from blue to red.
 const SONDE_FRESH_MAX_AGE_SEC = 180;
 
 const MAP_LIVE_ONLY_KEY = 'wettersonde-map-live-only';
@@ -376,11 +373,11 @@ function drawSpectrum(spec, peaksDoc) {
 const spectrumBinSmoothed = new Map();
 
 function smoothSpectrumPoints(points) {
-  const alpha = 0.35; // higher = reacts faster, lower = smoother/slower
+  const alpha = 0.35;
   const seen = new Set();
   const out = points.map(p => {
     const freq = p[0];
-    const key = Math.round(freq * 1e6); // Hz, avoids float-equality issues
+    const key = Math.round(freq * 1e6);
     seen.add(key);
     const prev = spectrumBinSmoothed.get(key);
     const smoothed = (prev === undefined) ? p[1] : prev + (p[1] - prev) * alpha;
@@ -449,9 +446,16 @@ function fmtTime(v) {
   return String(v).replace('T', ' ').replace('.000Z', ' UTC').replace('Z', ' UTC');
 }
 
+function fmtSondeType(v) {
+  if (v === null || v === undefined || v === '') return '-';
+  const s = String(v);
+  const idx = s.lastIndexOf(':');
+  return idx === -1 ? s : s.slice(idx + 1);
+}
+
 let radiosondesHours = 12;
-const ACTIVE_SONDE_MAX_AGE_SEC = 600; // 10 minutes - matches the radar's own freshness window
-let sondesCache = new Map(); // serial -> sonde row data
+const ACTIVE_SONDE_MAX_AGE_SEC = 600;
+let sondesCache = new Map();
 
 function renderRadiosondesTable() {
   const rows = document.getElementById('radiosondeRows');
@@ -467,7 +471,7 @@ function renderRadiosondesTable() {
       <td>${s.serial || '-'}</td>
       <td>${s.launchsite || '-'}</td>
       <td>${fmtFrequency(s.frequency)}</td>
-      <td>${s.type || '-'}</td>
+      <td>${fmtSondeType(s.type)}</td>
       <td>${fmtAltitude(s.first_altitude)}</td>
       <td>${fmtAltitude(s.last_altitude)}</td>
       <td>${fmtDistanceBearing(s.distance_km, s.bearing_deg, s.elevation_deg)}</td>
@@ -480,8 +484,6 @@ function renderRadiosondesTable() {
   });
 }
 
-// Full reload respecting the 12h/All filter - replaces the whole cache.
-// Only needed on tab switch / filter change, not on every periodic poll.
 async function loadRadiosondesFull() {
   try {
     const data = await getJson('/api/radiosondes?hours=' + radiosondesHours);
@@ -525,7 +527,6 @@ async function refreshCpu() {
   }
 }
 
-// ---- Map ----
 
 const TRACK_COLOR = '#0f6799';
 let sondeIcon = null;
@@ -548,16 +549,12 @@ function initSondeMap() {
     iconAnchor: [7, 18],
     popupAnchor: [1, 1]
   });
-  // Same icon + geometry wettersonde.net uses for its own predictionIcon.
   predictionIcon = L.icon({
     iconUrl: 'target.png',
     iconSize: [14, 14],
     iconAnchor: [7, 7],
     popupAnchor: [1, 1]
   });
-  // First-frame marker: same inline-SVG "triangleIcon" wettersonde.net uses
-  // for its own "sondeFirst" track marker (src/ws_icon.js) -- same size,
-  // colors and anchor, ported 1:1 rather than approximated with CSS.
   launchIcon = L.icon({
     iconUrl:
       'data:image/svg+xml;utf8,' +
@@ -570,9 +567,6 @@ function initSondeMap() {
     iconAnchor: [6.5, 13],
     popupAnchor: [0, -13]
   });
-  // Burst marker: same icon geometry as wettersonde.net's burstIcon
-  // (images/pop-marker.png, 15x15, anchor 7,7) but using the user's own
-  // burst.png, shipped alongside app.js/style.css.
   burstIcon = L.icon({
     iconUrl: 'burst.png',
     iconSize: [15, 15],
@@ -586,7 +580,6 @@ function initSondeMap() {
   initMapAzElBox();
 }
 
-// ---- Map fullscreen ----
 
 function initMapFullscreenButton() {
   const btn = document.getElementById('mapFullscreenBtn');
@@ -618,13 +611,6 @@ function initMapFullscreenButton() {
   update();
 }
 
-// ---- Map azimuth/elevation/distance overlay ----
-// Shown when a sonde marker is selected. Unlike wettersonde.net's own
-// AzElControl (which uses the browser's GPS position as the observer),
-// wsrx already computes distance_km/bearing_deg/elevation_deg server-side
-// relative to the fixed receiver station for every sonde in
-// /api/radiosondes -- so this just displays those values, no client-side
-// geolocation or trig needed.
 
 function initMapAzElBox() {
   const box = document.getElementById('mapAzElBox');
@@ -692,7 +678,7 @@ function initMapLiveFilterButton() {
     mapLiveOnly = !mapLiveOnly;
     try { localStorage.setItem(MAP_LIVE_ONLY_KEY, mapLiveOnly ? '1' : '0'); } catch (e) {}
     updateMapLiveFilterButton(btn);
-    sondeMapBoundsFitted = false; // re-fit the view to whatever the new filter shows
+    sondeMapBoundsFitted = false;
     refreshSondeMap();
   });
 }
@@ -712,9 +698,6 @@ function sondeLabelHtml(s) {
 }
 
 function bindSondeInteractivity(marker, serial) {
-  // Clicking a sonde on the map only selects it (shows the azel overlay) --
-  // unlike clicking a row in the radiosonde list, it should NOT open the
-  // detail dialog.
   marker.on('click', () => selectMapSonde(serial));
   marker.on('tooltipopen', () => {
     const tooltip = marker.getTooltip();
@@ -773,10 +756,6 @@ function renderSondePrediction(s, allPoints) {
   return true;
 }
 
-// Launch (first track point) and burst (highest-altitude track point so far)
-// markers, same idea as wettersonde.net's own track view. `track` here still
-// carries altitude ([lat, lon, alt|null, time]) -- refreshSondeMap keeps that
-// around for this, unlike the lat/lon-only `latlngs` used for the polyline.
 function renderSondeLaunchBurst(s, track, allPoints) {
   if (track.length < 2) {
     const existingLaunch = sondeMapLaunchLayers.get(s.serial);
@@ -787,9 +766,6 @@ function renderSondeLaunchBurst(s, track, allPoints) {
   }
 
   const launch = track[0];
-  // Only treat this as a burst once the sonde is actually falling -- while
-  // still ascending, the highest point so far is just "current altitude"
-  // and showing the burst icon there would be misleading.
   const falling = Number.isFinite(s.vel_v) && s.vel_v < 0;
   let burst = null;
   if (falling) {
@@ -862,8 +838,6 @@ async function refreshSondeMap() {
   for (const s of sondes) {
     if (!s.serial) continue;
 
-    // Keep altitude/time here (needed for the launch/burst markers below);
-    // `latlngs` below is the lat/lon-only view the polyline/bounds use.
     const track = Array.isArray(s.track)
       ? s.track.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(p => [p[0], p[1], p[2], p[3]])
       : [];
@@ -1109,9 +1083,8 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab, btn));
 });
 
-// ---- Radar ----
 let radarInterval = null;
-let radarStation = null; // {lat, lon, alt}
+let radarStation = null;
 
 const RADAR_DEG_TO_RAD = Math.PI / 180.0;
 const RADAR_EARTH_RADIUS = 6371000.0;
@@ -1395,7 +1368,7 @@ function joinParts(parts, sep) {
 const SONDE_DETAIL_ROWS = [
   { label: 'Serial', render: d => fmt1(d.serial) },
   { label: 'Type / Frequency', render: d => joinParts(
-      [fmt1(d.type), d.wsrx_frequency != null ? fmtFrequency(d.wsrx_frequency) : null], ' @ ') },
+      [fmt1(d.type != null ? fmtSondeType(d.type) : d.type), d.wsrx_frequency != null ? fmtFrequency(d.wsrx_frequency) : null], ' @ ') },
   { label: 'Encrypted', render: d => d.encrypted != null ? (d.encrypted ? 'Yes' : 'No') : null },
   { label: 'Frame # / Frames received', render: d => joinParts(
       [d.frame != null ? '#' + d.frame : null,
@@ -1428,9 +1401,6 @@ const SONDE_DETAIL_ROWS = [
        d.pressure != null ? Number(d.pressure).toFixed(2) + ' hPa' : null], ', ') },
   { label: 'Battery', render: d => d.batt != null ? Number(d.batt).toFixed(2) + ' V' : null },
   { label: 'RSSI', render: d => d.rssi != null ? Number(d.rssi).toFixed(1) + ' dBm' : null },
-  // Raw sonde-internal tx power code from rs41mod's "tx_power_raw" (currently
-  // RS41 only). Not a calibrated dBm value -- rs41mod.c surfaces the raw
-  // STATUS-block byte as-is, so this is shown as a plain code, not "X dBm".
   { label: 'TX power (raw code)', render: d => d.tx_power_raw != null ? String(d.tx_power_raw) : null },
   { label: 'Burst-kill timer', render: d => {
       const v = d.burstkilltimer != null ? d.burstkilltimer : d.bt;
@@ -1444,9 +1414,6 @@ const SONDE_DETAIL_ROWS = [
          d.rs41_mainboard_fw != null ? 'FW ' + d.rs41_mainboard_fw : null], ', ');
     } },
   { label: 'Aux data', render: d => fmt1(d.aux) },
-  // Decoded OIF411 (Vaisala ozone interface) XDATA, when the sonde's "aux"
-  // field is a 20-hex-digit OIF411 string (instrument type 5). Same field
-  // layout/scaling as wettersonde.net's own decodeOzoneXdata() (sonde.php).
   { label: 'Ozone: pump temperature', render: d => d.o3_pump_temperature_c != null ? Number(d.o3_pump_temperature_c).toFixed(2) + ' °C' : null },
   { label: 'Ozone: sensor current', render: d => d.o3_current_ua != null ? Number(d.o3_current_ua).toFixed(4) + ' µA' : null },
   { label: 'Ozone: pump current', render: d => d.o3_pump_current_ma != null ? d.o3_pump_current_ma + ' mA' : null },
@@ -1504,8 +1471,6 @@ async function loadSondeDetail(serial) {
     if (val === null || val === undefined || val === '') continue;
     rowsHtml += '<tr><td>' + escapeHtml(row.label) + '</td><td>' + escapeHtml(val) + '</td></tr>';
   }
-  // Anything the backend sends that isn't part of a known row above still
-  // shows up, just without friendly formatting/grouping.
   for (const key of Object.keys(data)) {
     if (SONDE_DETAIL_CONSUMED_KEYS.has(key)) continue;
     const v = data[key];
@@ -1581,7 +1546,6 @@ function initSpectrumTooltip() {
       return;
     }
 
-    // pixel position -> frequency, then find the nearest measured spectrum bin
     const freq = minF + (mx - padLCss) / plotWCss * (maxF - minF);
     let lo = 0, hi = points.length - 1;
     while (lo < hi) {
@@ -1591,7 +1555,6 @@ function initSpectrumTooltip() {
     if (lo > 0 && Math.abs(points[lo - 1][0] - freq) < Math.abs(points[lo][0] - freq)) lo -= 1;
     const pt = points[lo];
 
-    // if the cursor is close to a detected peak, snap to it and label it as such
     let hit = null, bestDist = Infinity;
     for (const p of peakHitboxes) {
       const d = Math.abs(p.xCss - mx);
