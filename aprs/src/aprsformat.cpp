@@ -1,5 +1,4 @@
 #include "aprsformat.h"
-
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -39,133 +38,528 @@ std::string firstChar(const std::string& s, char fallback) {
 std::string formatLatMinutes(double lat) {
     int lati = static_cast<int>(std::fabs(static_cast<int>(lat)));
     int latm = static_cast<int>((std::fabs(lat) - lati) * 6000);
+
     char buf[24];
-    std::snprintf(buf, sizeof(buf), "%02d%02d.%02d%c", lati, latm / 100, latm % 100, lat < 0 ? 'S' : 'N');
+
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "%02d%02d.%02d%c",
+        lati,
+        latm / 100,
+        latm % 100,
+        lat < 0 ? 'S' : 'N'
+    );
+
     return buf;
 }
 
 std::string formatLonMinutes(double lon) {
     int loni = static_cast<int>(std::fabs(static_cast<int>(lon)));
     int lonm = static_cast<int>((std::fabs(lon) - loni) * 6000);
+
     char buf[24];
-    std::snprintf(buf, sizeof(buf), "%03d%02d.%02d%c", loni, lonm / 100, lonm % 100, lon < 0 ? 'W' : 'E');
+
+    std::snprintf(
+        buf,
+        sizeof(buf),
+        "%03d%02d.%02d%c",
+        loni,
+        lonm / 100,
+        lonm % 100,
+        lon < 0 ? 'W' : 'E'
+    );
+
     return buf;
+}
+
+double calculateElevation(
+    double station_lat,
+    double station_lon,
+    double station_alt_m,
+    double sonde_lat,
+    double sonde_lon,
+    double sonde_alt_m)
+{
+    constexpr double kPi =
+        3.1415926535897932384626433832795;
+
+    constexpr double kDegToRad =
+        kPi / 180.0;
+
+    constexpr double kWgs84A =
+        6378137.0;
+
+    constexpr double kWgs84F =
+        1.0 / 298.257223563;
+
+    constexpr double kWgs84E2 =
+        kWgs84F * (2.0 - kWgs84F);
+
+
+    auto geodeticToEcef =
+        [&](double lat_deg,
+            double lon_deg,
+            double height_m)
+    {
+        struct Ecef {
+            double x;
+            double y;
+            double z;
+        };
+
+        const double lat =
+            lat_deg * kDegToRad;
+
+        const double lon =
+            lon_deg * kDegToRad;
+
+        const double sin_lat =
+            std::sin(lat);
+
+        const double cos_lat =
+            std::cos(lat);
+
+        const double sin_lon =
+            std::sin(lon);
+
+        const double cos_lon =
+            std::cos(lon);
+
+        const double n =
+            kWgs84A /
+            std::sqrt(
+                1.0 -
+                kWgs84E2 *
+                sin_lat *
+                sin_lat
+            );
+
+        Ecef result;
+
+        result.x =
+            (n + height_m) *
+            cos_lat *
+            cos_lon;
+
+        result.y =
+            (n + height_m) *
+            cos_lat *
+            sin_lon;
+
+        result.z =
+            (n * (1.0 - kWgs84E2) +
+             height_m) *
+            sin_lat;
+
+        return result;
+    };
+
+    const auto station =
+        geodeticToEcef(
+            station_lat,
+            station_lon,
+            station_alt_m
+        );
+
+    const auto sonde =
+        geodeticToEcef(
+            sonde_lat,
+            sonde_lon,
+            sonde_alt_m
+        );
+
+    const double dx =
+        sonde.x - station.x;
+
+    const double dy =
+        sonde.y - station.y;
+
+    const double dz =
+        sonde.z - station.z;
+
+    const double lat =
+        station_lat * kDegToRad;
+
+    const double lon =
+        station_lon * kDegToRad;
+
+    const double sin_lat =
+        std::sin(lat);
+
+    const double cos_lat =
+        std::cos(lat);
+
+    const double sin_lon =
+        std::sin(lon);
+
+    const double cos_lon =
+        std::cos(lon);
+
+
+    const double east =
+        -sin_lon * dx +
+         cos_lon * dy;
+
+    const double north =
+        -sin_lat * cos_lon * dx
+        -sin_lat * sin_lon * dy
+        +cos_lat * dz;
+
+    const double up =
+         cos_lat * cos_lon * dx
+        +cos_lat * sin_lon * dy
+        +sin_lat * dz;
+
+    const double horizontal_distance =
+        std::sqrt(
+            east * east +
+            north * north
+        );
+
+    const double elevation_rad =
+        std::atan2(
+            up,
+            horizontal_distance
+        );
+
+
+    return elevation_rad / kDegToRad;
 }
 
 }  // namespace
 
+
 namespace AprsFormat {
 
-std::string formatLatitude(double lat) { return formatLatMinutes(lat); }
-std::string formatLongitude(double lon) { return formatLonMinutes(lon); }
+std::string formatLatitude(double lat) {
+    return formatLatMinutes(lat);
+}
 
-std::string buildObjectReport(const AprsConfig& cfg, const JsonObject& frame) {
-    const double lat = frame.getDouble("latitude", 0.0);
-    const double lon = frame.getDouble("longitude", 0.0);
-    const double alt_m = frame.getDouble("altitude", 0.0);
-    const double speed_kmh = frame.getDouble("speed", 0.0);
-    const double course = frame.getDouble("direction", 0.0);
-    const double climb_ms = frame.getDouble("climb", 0.0);
-    const std::string type = frame.getString("type");
-    const std::string serial = frame.getString("serial");
-    const double freq_mhz = frame.getDouble("frequency", 0.0);
-    const std::string software = frame.getString("software", "wsrx");
-    const std::string version = frame.getString("version");
+std::string formatLongitude(double lon) {
+    return formatLonMinutes(lon);
+}
 
-    constexpr double kFeetPerMeter = 1.0 / 0.3048;
-    constexpr double kKmhPerKnot = 1.851984;
 
-    const double speed_kn = speed_kmh / kKmhPerKnot;
+std::string buildObjectReport(
+    const AprsConfig& cfg,
+    const JsonObject& frame)
+{
+    const double lat =
+        frame.getDouble("latitude", 0.0);
+
+    const double lon =
+        frame.getDouble("longitude", 0.0);
+
+    const double alt_m =
+        frame.getDouble("altitude", 0.0);
+
+    const double speed_kmh =
+        frame.getDouble("speed", 0.0);
+
+    const double course =
+        frame.getDouble("direction", 0.0);
+
+    const double climb_ms =
+        frame.getDouble("climb", 0.0);
+
+    const std::string type =
+        frame.getString("type");
+
+    const std::string serial =
+        frame.getString("serial");
+
+    const double freq_mhz =
+        frame.getDouble("frequency", 0.0);
+
+
+    constexpr double kFeetPerMeter =
+        1.0 / 0.3048;
+
+    constexpr double kKmhPerKnot =
+        1.851984;
+
+    const double elevation =
+        calculateElevation(
+            cfg.station_lat,
+            cfg.station_lon,
+            cfg.station_alt_m,
+            lat,
+            lon,
+            alt_m
+        );
+
+
+    const double speed_kn =
+        speed_kmh / kKmhPerKnot;
+
 
     std::ostringstream body;
-    body << ";" << aprsObjectName(serial) << "*";
 
-    std::string ts = frame.getString("timestamp");
+    body << ";"
+         << aprsObjectName(serial)
+         << "*";
+
+    std::string ts =
+        frame.getString("timestamp");
+
     if (ts.size() != 6) {
-        std::time_t t = std::time(nullptr);
+        std::time_t t =
+            std::time(nullptr);
+
         std::tm tm{};
-        gmtime_r(&t, &tm);
+
+        gmtime_r(
+            &t,
+            &tm
+        );
+
         char buf[8];
-        std::snprintf(buf, sizeof(buf), "%02d%02d%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "%02d%02d%02d",
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
+        );
+
         ts = buf;
     }
+
     body << ts << "h";
 
-
-    body << formatLatMinutes(lat) << firstChar(cfg.object_symbol_table, '/')
-         << formatLonMinutes(lon) << firstChar(cfg.object_symbol_code, 'O');
+    body
+        << formatLatMinutes(lat)
+        << firstChar(
+               cfg.object_symbol_table,
+               '/'
+           )
+        << formatLonMinutes(lon)
+        << firstChar(
+               cfg.object_symbol_code,
+               'O'
+           );
 
     if (speed_kn > 0.5) {
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "%03u/%03u", realcard(std::fmod(course + 360.0, 360.0)), realcard(speed_kn));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "%03u/%03u",
+            realcard(
+                std::fmod(
+                    course + 360.0,
+                    360.0
+                )
+            ),
+            realcard(speed_kn)
+        );
+
         body << buf;
     }
 
     if (alt_m > 0.5) {
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "/A=%06u", realcard(alt_m * kFeetPerMeter));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "/A=%06u",
+            realcard(
+                alt_m *
+                kFeetPerMeter
+            )
+        );
+
         body << buf;
     }
 
     {
         char buf[8];
-        std::snprintf(buf, sizeof(buf), "!w%c%c!", static_cast<char>(33 + dao91(lat)), static_cast<char>(33 + dao91(lon)));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "!w%c%c!",
+            static_cast<char>(
+                33 + dao91(lat)
+            ),
+            static_cast<char>(
+                33 + dao91(lon)
+            )
+        );
+
         body << buf;
     }
 
     {
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "Clb=%.1fm/s ", climb_ms);
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "Clb=%.1fm/s ",
+            climb_ms
+        );
+
         body << buf;
     }
+
     if (frame.has("pressure")) {
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "p=%.1fhPa ", frame.getDouble("pressure"));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "p=%.1fhPa ",
+            frame.getDouble(
+                "pressure"
+            )
+        );
+
         body << buf;
     }
+
     if (frame.has("temperature")) {
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "t=%.1fC ", frame.getDouble("temperature"));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "t=%.1fC ",
+            frame.getDouble(
+                "temperature"
+            )
+        );
+
         body << buf;
     }
+
     if (frame.has("humidity")) {
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "h=%.1f%% ", frame.getDouble("humidity"));
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "h=%.1f%% ",
+            frame.getDouble(
+                "humidity"
+            )
+        );
+
         body << buf;
     }
+
     {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.3fMHz Type=%s ", freq_mhz, type.c_str());
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "%.3fMHz Type=%s ",
+            freq_mhz,
+            type.c_str()
+        );
+
         body << buf;
     }
+
     if (frame.has("burstkilltimer")) {
-        int bk = frame.getInt("burstkilltimer");
-        if (bk >= 0 && bk < 65535) {  // 65535 = sentinel for "not set"
+        int bk =
+            frame.getInt(
+                "burstkilltimer"
+            );
+
+        if (bk >= 0 && bk < 65535) {
+
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "TxOff=%dh%02dm ", bk / 3600, (bk % 3600) / 60);
+
+            std::snprintf(
+                buf,
+                sizeof(buf),
+                "TxOff=%dh%02dm ",
+                bk / 3600,
+                (bk % 3600) / 60
+            );
+
             body << buf;
         }
     }
-    if (type.find("DFM") != std::string::npos || type.find("M10") != std::string::npos ||
+
+    if (type.find("DFM") != std::string::npos ||
+        type.find("M10") != std::string::npos ||
         type.find("M20") != std::string::npos) {
-        body << "ser=" << serial << " ";
+
+        body
+            << "ser="
+            << serial
+            << " ";
     }
-    body << software << (version.empty() ? "" : (" " + version));
+
+
+    {
+        char buf[32];
+
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "Elevation=%.1fdeg",
+            elevation
+        );
+
+        body << buf;
+    }
 
     std::ostringstream line;
-    line << cfg.callsign << ">" << cfg.tocall << ":" << body.str();
+
+    line
+        << cfg.callsign
+        << ">"
+        << cfg.tocall
+        << ":"
+        << body.str();
+
     return line.str();
 }
 
-std::string buildStationBeacon(const AprsConfig& cfg) {
+
+std::string buildStationBeacon(
+    const AprsConfig& cfg)
+{
     std::ostringstream body;
-    body << "!" << formatLatMinutes(cfg.station_lat) << firstChar(cfg.station_symbol_table, '/')
-         << formatLonMinutes(cfg.station_lon) << firstChar(cfg.station_symbol_code, '-');
-    
+
+    body
+        << "!"
+        << formatLatMinutes(
+               cfg.station_lat
+           )
+        << firstChar(
+               cfg.station_symbol_table,
+               '/'
+           )
+        << formatLonMinutes(
+               cfg.station_lon
+           )
+        << firstChar(
+               cfg.station_symbol_code,
+               '-'
+           );
+
     body << cfg.station_comment;
 
+
     std::ostringstream line;
-    line << cfg.callsign << ">" << cfg.tocall << ":" << body.str();
+
+    line
+        << cfg.callsign
+        << ">"
+        << cfg.tocall
+        << ":"
+        << body.str();
+
     return line.str();
 }
 
