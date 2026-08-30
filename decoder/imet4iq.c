@@ -840,6 +840,7 @@ typedef struct {
     int ptu_valid;
     //
     int jsn_freq;   // freq/kHz (SDR)
+    int imet1;      // 0: iMet-4 , 1: iMet-1-RS (--imet1)
 } gpx_t;
 
 gpx_t gpx;
@@ -1360,9 +1361,13 @@ int print_frame(int len, int bits2byte) {
                 if (gpx.gps_valid && gpx.ptu_valid) // frameNb part of PTU-pck
                 {
                     char *ver_jsn = NULL;
+                    char *subtype  = gpx.imet1 ? "iMet-1-RS" : "iMet-4";
+                    char *gps_type = (gpx.gps_valid == PKT_eGPS) ? "eGPS" : "GPS";
+                    char *ptu_type = (gpx.ptu_valid == PKT_ePTU) ? "ePTU" : "PTU";
                     fprintf(stdout, "{ \"type\": \"%s\"", "IMET");
-                    fprintf(stdout, ", \"frame\": %d, \"id\": \"iMet\", \"datetime\": \"%02d:%02d:%02dZ\", \"lat\": %.5f, \"lon\": %.5f, \"alt\": %d, \"sats\": %d, \"temp\": %.2f, \"humidity\": %.2f, \"pressure\": %.2f, \"batt\": %.1f",
-                            gpx.frame, gpx.hour, gpx.min, gpx.sec, gpx.lat, gpx.lon, gpx.alt, gpx.sats, gpx.temp, gpx.humidity, gpx.pressure, gpx.batt);
+                    fprintf(stdout, ", \"subtype\": \"%s\"", subtype);
+                    fprintf(stdout, ", \"frame\": %d, \"id\": \"iMet\", \"datetime\": \"%02d:%02d:%02dZ\", \"lat\": %.5f, \"lon\": %.5f, \"alt\": %d, \"sats\": %d, \"gps_type\": \"%s\", \"ptu_type\": \"%s\", \"temp\": %.2f, \"humidity\": %.2f, \"pressure\": %.2f, \"batt\": %.1f",
+                            gpx.frame, gpx.hour, gpx.min, gpx.sec, gpx.lat, gpx.lon, gpx.alt, gpx.sats, gps_type, ptu_type, gpx.temp, gpx.humidity, gpx.pressure, gpx.batt);
                     // Geschwindigkeit/Steig-Sinkrate/Flugrichtung (wie rs41mod):
                     // direkt aus eGPS-Paket, sonst aus aufeinanderfolgenden GPS-Fixes berechnet
                     if (gpx.vel_valid) {
@@ -1506,7 +1511,7 @@ int main(int argc, char *argv[]) {
         else if   (strcmp(*argv, "--min") == 0) {
             option_min = 1;
         }
-        else if   (strcmp(*argv, "--imet1") == 0) { dsp.opt_imet1 = 1; }  // iMet-1-RS bw=64k
+        else if   (strcmp(*argv, "--imet1") == 0) { dsp.opt_imet1 = 1; gpx.imet1 = 1; }  // iMet-1-RS bw=64k
         else if ( (strcmp(*argv, "--json") == 0) ) {
             option_json = 1;
         }
