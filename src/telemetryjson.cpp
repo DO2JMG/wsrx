@@ -1,5 +1,7 @@
 #include "telemetryjson.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
@@ -8,6 +10,11 @@
 #include <sstream>
 
 namespace {
+
+std::string upperCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return s;
+}
 
 std::string jsonEscape(const std::string& s) {
     std::ostringstream out;
@@ -122,7 +129,10 @@ bool hasGpsFix(const TelemetryFrame& frame) {
 }
 
 bool validTypeSerial(const TelemetryFrame& frame) {
-    const auto& type = frame.type;
+    // Gross-/Kleinschreibung-unabhaengig, da subtype-Werte (z.B. "iMet-4",
+    // "iMet-1-RS", "RS41-SGP") den Typ 1:1 ersetzen und dabei nicht zwingend
+    // durchgehend Grossbuchstaben verwenden.
+    const std::string type = upperCopy(frame.type);
     const auto& serial = frame.serial;
 
     if (type.find("RS41") != std::string::npos) {
