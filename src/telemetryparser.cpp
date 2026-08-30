@@ -384,7 +384,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
         if (upper_type_for_subtype.find("RS41") != std::string::npos
             || upper_type_for_subtype.find("DFM") != std::string::npos
             || upper_type_for_subtype.find("RS92") != std::string::npos
-            || upper_type_for_subtype.find("LMS") != std::string::npos) {
+            || upper_type_for_subtype.find("LMS") != std::string::npos
+            || upper_type_for_subtype.find("IMET") != std::string::npos) {
             f.type = normalizeDFM(*subtype);
         }
     }
@@ -466,7 +467,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     f.type = normalizeDFM(f.type);
     const std::string normalized_type_upper = upperCopy(f.type);
     if (normalized_type_upper.find("IMET") != std::string::npos || startsWith(upperCopy(f.serial), "IMET")) {
-        f.type = "IMET";
+        if (normalized_type_upper.find("IMET") == std::string::npos) f.type = "IMET";
         f.serial = normalizeImet(f.serial, f.frame, f.timestamp_hhmmss);
     } else if (normalized_type_upper.find("M10") != std::string::npos || normalized_type_upper.find("M20") != std::string::npos) {
 
@@ -527,4 +528,3 @@ std::optional<std::string> TelemetryParser::extractString(const std::string& tex
 
     return std::nullopt;
 }
-
