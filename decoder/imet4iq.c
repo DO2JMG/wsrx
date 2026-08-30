@@ -1,4 +1,3 @@
-
 /*
  *  iMet-4 / iMet-1-RS
  *  Bell202 8N1
@@ -825,7 +824,8 @@ typedef struct {
     float lon;
     int alt;
     int sats;
-    float vH; float vD; float vV; // eGPS
+    float vH; float vD; float vV; // eGPS, oder aus Positionsdifferenz berechnet
+    int vel_valid;  // vH/vD/vV verfuegbar (eGPS-Paket oder aus 2 aufeinanderfolgenden GPS-Fixes)
     // PTU
     int frame;
     float temp;
@@ -1062,6 +1062,14 @@ packet size = 18/30 bytes
 #define pos_eGPStim     0x19  // 3 byte
 #define pos_eGPScrc     0x1C  // 2 byte
 
+// Referenz-Fix (letzter gueltiger GPS-Fix) fuer Geschwindigkeit/Steigrate/Richtung
+// aus Positionsdifferenz, falls keine (e)GPS-Rohgeschwindigkeit gesendet wird
+static int    velref_valid = 0;
+static double velref_t   = 0;
+static float  velref_lat = 0;
+static float  velref_lon = 0;
+static int    velref_alt = 0;
+
 int print_eGPS(int pos, ui8_t PKT_ID) {
     float lat, lon;
     float vE, vN, vU, vH, vD; // E,N,U, speed, dir/heading
@@ -1073,8 +1081,8 @@ int print_eGPS(int pos, ui8_t PKT_ID) {
 
     if (PKT_ID != PKT_GPS && PKT_ID != PKT_eGPS) return -1;
 
-    crc_val = ((byteframe+pos)[pos_GPScrc] << 8) | (byteframe+pos)[pos_GPScrc+1];
-    crc = crc16(byteframe+pos, pos_GPScrc); // len=pos
+    crc_val = ((byteframe+pos)[posGPSCRC] << 8) | (byteframe+pos)[posGPSCRC+1];
+    crc = crc16(byteframe+pos, posGPSCRC); // len=pos
 
     //lat = *(float*)(byteframe+pos+pos_GPSlat);
     //lon = *(float*)(byteframe+pos+pos_GPSlon);
@@ -1127,10 +1135,52 @@ int print_eGPS(int pos, ui8_t PKT_ID) {
         gpx.hour = std;
         gpx.min = min;
         gpx.sec = sek;
+        gpx.vel_valid = 0;
+
         if (PKT_ID == PKT_eGPS) {
-            gpx.vH = vH;
-            gpx.vD = vD;
-            gpx.vV = vU;
+            // Geschwindigkeit/Steigrate/Richtung direkt aus dem eGPS-Paket
+            if (vH < 1000.0f && vU > -1000.0f && vU < 1000.0f) {
+                gpx.vH = vH;
+                gpx.vD = vD;
+                gpx.vV = vU;
+                gpx.vel_valid = 1;
+            }
+        }
+        else if (std < 25 && min < 61 && sek < 100
+                 && lat > -91.0f && lat < 91.0f && lon > -181.0f && lon < 181.0f
+                 && alt > -1000 && alt < 80000) {
+            // kein eGPS: Geschwindigkeit/Steigrate/Richtung aus zwei aufeinanderfolgenden
+            // GPS-Fixes (Position/Zeit) herleiten, aehnlich wie bei anderen Sonden ueblich
+            double t_now = std*3600.0 + min*60.0 + sek;
+
+            if (velref_valid) {
+                double dt = t_now - velref_t;
+                if (dt < 0) dt += 86400.0; // Tageswechsel UTC
+
+                if (dt >= 0.8 && dt <= 30.0) {
+                    double Rearth = 6371000.0; // mittlerer Erdradius, m
+                    double dlat = (lat - velref_lat) * M_PI/180.0;
+                    double dlon = (lon - velref_lon) * M_PI/180.0;
+                    double mlat = (lat + velref_lat)*0.5 * M_PI/180.0;
+                    double dN = dlat * Rearth;             // Nord, m
+                    double dE = dlon * cos(mlat) * Rearth; // Ost, m
+                    double dist = sqrt(dN*dN + dE*dE);
+                    double dAlt = alt - velref_alt;
+                    double heading = atan2(dE, dN) * 180.0/M_PI;
+                    if (heading < 0) heading += 360.0;
+
+                    gpx.vH = (float)(dist/dt);
+                    gpx.vD = (float)heading;
+                    gpx.vV = (float)(dAlt/dt);
+                    gpx.vel_valid = 1;
+                }
+            }
+
+            velref_valid = 1;
+            velref_t   = t_now;
+            velref_lat = lat;
+            velref_lon = lon;
+            velref_alt = alt;
         }
     }
     else {
@@ -1313,8 +1363,9 @@ int print_frame(int len, int bits2byte) {
                     fprintf(stdout, "{ \"type\": \"%s\"", "IMET");
                     fprintf(stdout, ", \"frame\": %d, \"id\": \"iMet\", \"datetime\": \"%02d:%02d:%02dZ\", \"lat\": %.5f, \"lon\": %.5f, \"alt\": %d, \"sats\": %d, \"temp\": %.2f, \"humidity\": %.2f, \"pressure\": %.2f, \"batt\": %.1f",
                             gpx.frame, gpx.hour, gpx.min, gpx.sec, gpx.lat, gpx.lon, gpx.alt, gpx.sats, gpx.temp, gpx.humidity, gpx.pressure, gpx.batt);
-                    // TODO: TEST eGPS/vel
-                    if (0 && gpx.gps_valid == PKT_eGPS) {
+                    // Geschwindigkeit/Steig-Sinkrate/Flugrichtung (wie rs41mod):
+                    // direkt aus eGPS-Paket, sonst aus aufeinanderfolgenden GPS-Fixes berechnet
+                    if (gpx.vel_valid) {
                         fprintf(stdout, ", \"vel_h\": %.5f, \"heading\": %.5f, \"vel_v\": %.5f", gpx.vH, gpx.vD, gpx.vV );
                     }
                     if (gpx.xdata[0]) {
@@ -1723,4 +1774,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
