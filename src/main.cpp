@@ -1499,7 +1499,8 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                 if (decoder_name != "rs41" && decoder_name != "rs92" && decoder_name != "lms6" && decoder_name != "dfm" && decoder_name != "m10" &&
                     decoder_name != "m20" && decoder_name != "imet" && decoder_name != "meisei" &&
                     decoder_name != "s1" && decoder_name != "dropsonde" &&
-                    decoder_name != "mrz" && decoder_name != "mts01" && decoder_name != "cf06ht03") {
+                    decoder_name != "mrz" && decoder_name != "mts01" && decoder_name != "cf06ht03" &&
+                    decoder_name != "c34c50") {
                     std::ostringstream unsupported;
                     unsupported << "scan detected unsupported sonde " << det->sonde_type
                                 << " near " << f_mhz << " MHz";
