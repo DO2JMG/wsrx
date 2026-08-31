@@ -49,8 +49,6 @@ What this software can do!
 | Aerospace Newsky | CF-06-AH | ✅ | Not Sent | Not Sent | Not Sent |
 | Huayuntianyi | HT03G-1U (GTH3) | ✅ | ✅ | ✅ | ✅ |
 
-- The C50 has not been tested.
-
 <p>&nbsp;</p>
 
 ## Table of Contents
