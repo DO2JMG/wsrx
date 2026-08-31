@@ -1,4 +1,3 @@
-
 /*
    C50
    (recommended: sample rate 48kHz)
@@ -59,6 +58,8 @@ typedef struct {
     unsigned chk;
     float T; float RH;
     int jsn_freq;   // freq/kHz (SDR)
+    float vH; float vD; float vV; // Geschwindigkeit, Richtung, Steigrate (aus aufeinanderfolgenden GPS-Fixes)
+    int vel_valid;  // vH/vD/vV verfuegbar
 } gpx_t;
 
 static gpx_t gpx;
@@ -886,6 +887,10 @@ static void printGPX() {
             if (gpx.RH > -0.5) printf(" RH=%.0f%%", gpx.RH);
         }
 
+        if (gpx.vel_valid) {
+            printf("  vH: %.1fm/s  D: %.1f°  vV: %.1fm/s", gpx.vH, gpx.vD, gpx.vV);
+        }
+
         if (option_verbose) {
             printf("  # ");
             for (i = 0; i < 5; i++) printf("%d", (gpx.chk>>i)&1);
@@ -918,6 +923,10 @@ static void printJSON() {
     if (option_ptu && (gpx.T > -273.0 || gpx.RH > -0.5)) {
         if (gpx.T > -273.0) printf(", \"temp\": %.1f", gpx.T);
         if (gpx.RH > -0.5) printf(", \"humidity\": %.1f", gpx.RH);
+    }
+    // Geschwindigkeit/Steig-Sinkrate/Flugrichtung, aus aufeinanderfolgenden GPS-Fixes berechnet
+    if (gpx.vel_valid) {
+        printf(", \"vel_h\": %.5f, \"heading\": %.5f, \"vel_v\": %.5f", gpx.vH, gpx.vD, gpx.vV);
     }
     if (gpx.jsn_freq > 0) {
         printf(", \"freq\": %d", gpx.jsn_freq);
@@ -970,6 +979,13 @@ static float NMEAll2(int ll) {  // NMEA GGA,GLL: ll/1e5=(D)DDMM.mmmm
     float min = (ll - deg*10000000)/1e5;
     return deg+min/60.0;
 }
+
+// Referenz (letzter gueltiger Fix) fuer Geschwindigkeit/Richtung/Steigrate
+static int    velref_valid = 0;
+static double velref_t   = 0.0;
+static double velref_lat = 0.0;
+static double velref_lon = 0.0;
+static double velref_alt = 0.0;
 
 static int evalBytes2(dsp_t *dsp) {
     int i, val = 0;
@@ -1047,20 +1063,66 @@ static int evalBytes2(dsp_t *dsp) {
     }
 
     if (id == 0x18) {
-        printGPX();
-        if (option_json && check==0) {
-            if ( ((cnt_dat|cnt_tim|cnt_lat|cnt_lon)&0x80000000)==0 &&
-                 cnt_alt - cnt_dat < dsp->sr &&
-                 cnt_alt - cnt_tim < dsp->sr &&
-                 cnt_alt - cnt_lat < dsp->sr &&
-                 cnt_alt - cnt_lon < dsp->sr )
+        int fix_ok = 0;
+
+        gpx.vel_valid = 0;
+
+        if ( check==0 &&
+             ((cnt_dat|cnt_tim|cnt_lat|cnt_lon)&0x80000000)==0 &&
+             cnt_alt - cnt_dat < dsp->sr &&
+             cnt_alt - cnt_tim < dsp->sr &&
+             cnt_alt - cnt_lat < dsp->sr &&
+             cnt_alt - cnt_lon < dsp->sr &&
+             gpx.std < 25 && gpx.min < 61 && gpx.sek < 100 &&
+             gpx.lat >= -90.0  && gpx.lat <= 90.0 &&
+             gpx.lon >= -180.0 && gpx.lon <= 180.0 &&
+             gpx.alt >= -100.0 && gpx.alt <= 50000.0 )
+        {
+            fix_ok = 1;
+
+            if (cnt_alt - cnt_t3 > dsp->sr) gpx.T = -273.15;
+            if (cnt_alt - cnt_rh > dsp->sr) gpx.RH = -1.0;
+
+            // Geschwindigkeit/Steig-Sinkrate/Flugrichtung aus zwei aufeinanderfolgenden
+            // GPS-Fixes (Position/Zeit) herleiten (kein eGPS-Paket wie bei rs41/iMet-eGPS)
             {
-                if (cnt_alt - cnt_t3 > dsp->sr) gpx.T = -273.15;
-                if (cnt_alt - cnt_rh > dsp->sr) gpx.RH = -1.0;
-                if (gpx.alt >= -100.0 && gpx.alt <= 50000.0 && gpx.lat >= -90.0  && gpx.lat <= 90.0) {
-                    printJSON();
+                double t_now = gpx.std*3600.0 + gpx.min*60.0 + gpx.sek;
+
+                if (velref_valid) {
+                    double dt = t_now - velref_t;
+                    if (dt < 0) dt += 86400.0; // Tageswechsel UTC
+
+                    if (dt >= 0.8 && dt <= 30.0) {
+                        double Rearth = 6371000.0; // mittlerer Erdradius, m
+                        double dlat = (gpx.lat - velref_lat) * M_PI/180.0;
+                        double dlon = (gpx.lon - velref_lon) * M_PI/180.0;
+                        double mlat = (gpx.lat + velref_lat)*0.5 * M_PI/180.0;
+                        double dN = dlat * Rearth;             // Nord, m
+                        double dE = dlon * cos(mlat) * Rearth; // Ost, m
+                        double dist = sqrt(dN*dN + dE*dE);
+                        double dAlt = gpx.alt - velref_alt;
+                        double heading = atan2(dE, dN) * 180.0/M_PI;
+                        if (heading < 0) heading += 360.0;
+
+                        gpx.vH = (float)(dist/dt);
+                        gpx.vD = (float)heading;
+                        gpx.vV = (float)(dAlt/dt);
+                        gpx.vel_valid = 1;
+                    }
                 }
+
+                velref_valid = 1;
+                velref_t   = t_now;
+                velref_lat = gpx.lat;
+                velref_lon = gpx.lon;
+                velref_alt = gpx.alt;
             }
+        }
+
+        printGPX();
+
+        if (option_json && fix_ok) {
+            printJSON();
         }
     }
 
@@ -1444,4 +1506,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
