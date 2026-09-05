@@ -229,10 +229,8 @@ data = wettersonde-pcm.local
 [airspy]
 device = airspy
 description = "wettersonde_rx"
-frequency = 407m0
-
-[telemetry]
-freq = "401m50"
+frequency = 406m6
+samprate = 20000000
 
 [manual-400]
 freq = 0
