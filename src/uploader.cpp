@@ -2,15 +2,43 @@
 #include "logger.h"
 #include "telemetryjson.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
 
 namespace {
-constexpr const char* APP_VERSION = "0.1.06";
+
 constexpr const char* TELEMETRY_URL = "http://api.wettersonde.net/telemetrie.php";
 constexpr const char* POSITION_URL = "http://api.wettersonde.net/position.php";
+constexpr const char* ENCRYPT_URL = "http://api.wettersonde.net/encrypt.php";
+
+std::string upperCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return s;
+}
+
+bool isRs41Sgm(const std::string& type) {
+    return upperCopy(type).find("RS41-SGM") != std::string::npos;
+}
+
+std::string urlEncode(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += static_cast<char>(c);
+        } else {
+            out += '%';
+            out += hex[(c >> 4) & 0xF];
+            out += hex[c & 0xF];
+        }
+    }
+    return out;
+}
 
 std::string jsonEscape(const std::string& s) {
     std::ostringstream out;
@@ -71,6 +99,9 @@ Uploader::Uploader(const Config& cfg, Logger& log) : cfg_(cfg), log_(log) {
 
 bool Uploader::sendTelemetry(const TelemetryFrame& frame) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    maybeNotifyEncryptedRs41Sgm(frame);
+
     if (!hasGpsFix(frame)) {
         log_.debug("Rejected frame without GPS fix (lat/lon = 0): type=" + frame.type + " serial=" + frame.serial);
         return false;
@@ -120,7 +151,7 @@ bool Uploader::maybeSendReceiverPosition() {
     addNumberRaw(oss, first, "longitude", cfg_.station_lon);
     addNumber1(oss, first, "altitude", cfg_.station_alt);
     addString(oss, first, "software", "wsrx");
-    addString(oss, first, "version", APP_VERSION);
+    addString(oss, first, "version", WSRX_VERSION);
     oss << '}';
 
     last_position_upload_ = now;
@@ -162,7 +193,54 @@ bool Uploader::validTypeSerial(const TelemetryFrame& frame) const {
 }
 
 std::string Uploader::buildTelemetryPostData(const TelemetryFrame& frame) const {
-    return TelemetryJson::buildTelemetryJson(frame, cfg_.callsign, APP_VERSION);
+    return TelemetryJson::buildTelemetryJson(frame, cfg_.callsign, WSRX_VERSION);
+}
+
+void Uploader::maybeNotifyEncryptedRs41Sgm(const TelemetryFrame& frame) {
+    if (!isRs41Sgm(frame.type)) return;
+    if (frame.serial.empty()) return;
+    if (!validTypeSerial(frame)) return;
+
+    if (encrypt_notified_serials_.find(frame.serial) != encrypt_notified_serials_.end()) return;
+    encrypt_notified_serials_.insert(frame.serial);
+
+    const double freq_mhz = !std::isnan(frame.tx_frequency_mhz) ? frame.tx_frequency_mhz : frame.frequency_mhz;
+
+    std::ostringstream freq_oss;
+    freq_oss << std::fixed << std::setprecision(3) << freq_mhz;
+
+    std::ostringstream url;
+    url << ENCRYPT_URL
+        << "?serial=" << urlEncode(frame.serial)
+        << "&frequency=" << urlEncode(freq_oss.str())
+        << "&callsign=" << urlEncode(cfg_.callsign);
+
+    if (cfg_.dry_run || !cfg_.upload_enabled) {
+        log_.info("DRY-RUN RS41-SGM encrypt notification: " + url.str());
+        return;
+    }
+
+    log_.info("Notifying wettersonde.net of encrypted RS41-SGM: serial=" + frame.serial +
+              " freq=" + freq_oss.str() + "MHz");
+
+    getWithCurl(url.str());
+}
+
+bool Uploader::getWithCurl(const std::string& url) {
+    if (cfg_.verbose) {
+        log_.debug("upload GET " + url);
+    }
+
+    std::string cmd = "curl -fsS -m 10 -X GET " + shellQuote(url) + " >/dev/null";
+    int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+        log_.warn("Upload failed: " + url);
+        return false;
+    }
+    if (cfg_.verbose) {
+        log_.debug("Upload OK: " + url);
+    }
+    return true;
 }
 
 bool Uploader::postWithCurl(const std::string& url, const std::string& data) {

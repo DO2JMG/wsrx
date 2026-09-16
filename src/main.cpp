@@ -39,8 +39,6 @@ static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
 
-static constexpr const char* APP_VERSION = "0.1.06";
-
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
 }
@@ -688,7 +686,7 @@ static void writeVersionJson(const std::string& base_dir, Logger& log) {
 
         out << "{\n";
         out << "  \"software\": \"wsrx\",\n";
-        out << "  \"version\": \"" << APP_VERSION << "\"\n";
+        out << "  \"version\": \"" << WSRX_VERSION << "\"\n";
         out << "}\n";
         out.close();
         std::filesystem::rename(tmp_path, out_path, ec);
@@ -1524,6 +1522,21 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                             chcfg.ka9q_high_hz = 30000;
                         }
 
+                        if (decoder_name == "rs41") {
+                            chcfg.ka9q_low_hz = -3000;
+                            chcfg.ka9q_high_hz = 3000;
+                        }
+
+                        if (decoder_name == "dfm") {
+                            chcfg.ka9q_low_hz = -3000;
+                            chcfg.ka9q_high_hz = 3000;
+                        }
+
+                        if (decoder_name == "m10" || decoder_name == "m20") {
+                            chcfg.ka9q_low_hz = -12000;
+                            chcfg.ka9q_high_hz = 12000;
+                        }
+
                         std::ostringstream hit;
                         hit << "scan detected " << det->sonde_type << " at " << f_mhz << " MHz";
                         if (radio != nullptr) hit << " via [" << radio->name << "]";
@@ -1653,7 +1666,7 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, handleSignal);
         std::signal(SIGTERM, handleSignal);
 
-        log.info(std::string("wsrx ") + APP_VERSION + " started");
+        log.info(std::string("wsrx ") + WSRX_VERSION + " started");
         log.info(std::string("programmed by Jean-Michael Grobel (DO2JMG)"));
         writeVersionJson(g_base_dir, log);
         {

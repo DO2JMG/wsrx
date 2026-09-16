@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+constexpr const char* WSRX_VERSION = "0.1.07";
+
 struct RadioBackend {
     std::string name = "default";
     std::string ka9q_radio;

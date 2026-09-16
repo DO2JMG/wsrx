@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 class Logger;
 
@@ -22,11 +23,13 @@ private:
     bool validTypeSerial(const TelemetryFrame& frame) const;
     std::string buildTelemetryPostData(const TelemetryFrame& frame) const;
     bool postWithCurl(const std::string& url, const std::string& data);
+    bool getWithCurl(const std::string& url);
+    void maybeNotifyEncryptedRs41Sgm(const TelemetryFrame& frame);
 
     const Config& cfg_;
     Logger& log_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_upload_;
     std::chrono::steady_clock::time_point last_position_upload_;
+    std::unordered_set<std::string> encrypt_notified_serials_;
     std::mutex mutex_;
 };
-

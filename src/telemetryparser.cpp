@@ -359,6 +359,8 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
             current_frame_ = std::stoi(m[1]);
             current_serial_ = m[2];
             current_type_ = "RS41";
+            current_valid_ = true;
+            current_set_at_ = std::chrono::steady_clock::now();
             return std::nullopt;
         }
     }
@@ -434,9 +436,17 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
             if (m[4].matched) f.speed_ms = std::stod(m[4]);
             if (m[5].matched) f.heading_deg = std::stod(m[5]);
             if (m[6].matched) f.climb_ms = std::stod(m[6]);
-            if (!current_serial_.empty()) f.serial = current_serial_;
-            f.type = current_type_.empty() ? "RS41" : current_type_;
-            f.frame = current_frame_;
+
+            const bool header_fresh = current_valid_
+                && (std::chrono::steady_clock::now() - current_set_at_) <= kHeaderMaxAge;
+
+            if (header_fresh && !current_serial_.empty()) {
+                f.serial = current_serial_;
+                f.type = current_type_.empty() ? "RS41" : current_type_;
+                f.frame = current_frame_;
+ 
+                current_valid_ = false;
+            }
         }
     }
 
