@@ -17,6 +17,7 @@ What this software can do!
 - The entire radiosonde frequency range is scanned
 - Radiosondes are automatically detected
 - Simultaneous decoding of multiple radiosondes
+- Report RS41-SGM to wettersonde.net
 
 <img width="1157" height="711" alt="screen" src="https://github.com/user-attachments/assets/020529b4-bceb-4c48-ac5e-5314d9d2835e" />
 
