@@ -188,6 +188,7 @@ async function refreshStatus() {
       }
     }
     setHtml('path', cachedCallsign ? ('Receiver: <span class="header-value">' + escapeHtml(cachedCallsign) + '</span>') : '');
+    setHtml('title', cachedCallsign ? ('Webinterface wsrx: ' + escapeHtml(cachedCallsign) + '') : '');
     setText('statusText', s.raw || '');
     const channels = s.channels || [];
     activeChannelFreqs = channels.map(x => Number(x)).filter(x => Number.isFinite(x));
