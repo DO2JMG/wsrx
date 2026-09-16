@@ -1,3 +1,7 @@
+Version 0.1.07
+- RS41-SGM data are reported to wettersonde.net
+- Bugs fixed
+- 
 Version 0.1.06
 - Decoding tx power from RS41
 - Decoding aux from ozone
