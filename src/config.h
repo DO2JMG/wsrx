@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-constexpr const char* WSRX_VERSION = "0.1.08";
+constexpr const char* WSRX_VERSION = "0.1.09";
 
 struct RadioBackend {
     std::string name = "default";
