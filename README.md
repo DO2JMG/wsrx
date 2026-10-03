@@ -85,6 +85,7 @@ sudo apt install -y avahi-utils build-essential make gcc g++ git wget unzip rsyn
   uuid-dev libsamplerate-dev
 
 sudo apt install -y curl
+sudo apt install libcurl4-openssl-dev
 ```
 
 ## Installing wsrx
