@@ -1,4 +1,8 @@
-Version 0.1.07
+Version 0.1.09 
+- Please install... sudo apt install libcurl4-openssl-dev
+- Bug fixed uploader (timing problem)
+  
+Version 0.1.08
 - Bug fixed
 
 Version 0.1.07
