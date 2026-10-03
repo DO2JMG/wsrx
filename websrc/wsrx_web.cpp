@@ -213,28 +213,15 @@ static std::map<std::string, std::string> parse_query(const std::string &q) {
     return m;
 }
 
-// ---------------------------------------------------------------------------------------
-// Incremental file reading
-//
-// wsrx only ever appends to wsrx.log and to the per-sonde logs (or truncates/deletes them as
-// a whole). Instead of re-reading such a file on every request, a FileFollower remembers how
-// far it was read plus the first bytes of the file, and hands out only the lines appended
-// since the last call. A replaced or truncated file is detected and read again from the start.
-// ---------------------------------------------------------------------------------------
-
 static constexpr size_t kFollowHeadBytes = 64;
 
 struct FileFollower {
     dev_t dev = 0;
     ino_t ino = 0;
-    off_t offset = 0;   // always at a line boundary
-    std::string head;   // first bytes of the file
+    off_t offset = 0;  
+    std::string head;   
 };
 
-// on_reset() is called before the file is read again from the start; the caller drops
-// everything it derived from earlier lines there. on_line(line) gets each new complete line.
-// A last line without newline is only passed on (once) if unterminated_grace_sec >= 0 and the
-// file has not been modified for that many seconds.
 template <typename ResetFn, typename LineFn>
 static void follow_file(FileFollower &ff, const std::string &path, const struct stat &st,
                         ResetFn &&on_reset, LineFn &&on_line, int unterminated_grace_sec) {
@@ -282,64 +269,6 @@ static void follow_file(FileFollower &ff, const std::string &path, const struct 
     ff.offset = pos;
 }
 
-// ---------------------------------------------------------------------------------------
-// Active channels, derived from the "starting/stopping decoder channel" lines in wsrx.log
-// ---------------------------------------------------------------------------------------
-
-static void apply_channel_log_line(std::vector<std::string> &channels, const std::string &line) {
-    const std::string start = "starting decoder channel ";
-    const std::string stop = "stopping decoder channel ";
-    size_t p = line.find(start);
-    if (p != std::string::npos) {
-        p += start.size();
-        size_t e = line.find(' ', p);
-        std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
-        channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
-        channels.push_back(freq);
-    }
-    p = line.find(stop);
-    if (p != std::string::npos) {
-        p += stop.size();
-        size_t e = line.find(' ', p);
-        std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
-        channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
-    }
-    // A freshly started wsrx has no channels yet (also clears channels of a crashed instance
-    // that never logged its "stopping" lines).
-    static const std::string started = " started";
-    if (line.find("[INFO] wsrx ") != std::string::npos && line.size() >= started.size() &&
-        line.compare(line.size() - started.size(), started.size(), started) == 0) {
-        channels.clear();
-    }
-}
-
-static std::mutex g_channel_log_mutex;
-static FileFollower g_channel_log_follower;
-static std::vector<std::string> g_channel_log_channels;
-
-static std::string active_channels_json(const std::string &log_file) {
-    std::lock_guard<std::mutex> lock(g_channel_log_mutex);
-    struct stat st{};
-    if (stat(log_file.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-        follow_file(g_channel_log_follower, log_file, st,
-                    [] { g_channel_log_channels.clear(); },
-                    [](const std::string &line) { apply_channel_log_line(g_channel_log_channels, line); },
-                    -1);
-    } else {
-        g_channel_log_follower = FileFollower{};
-        g_channel_log_channels.clear();
-    }
-
-    std::ostringstream js;
-    js << "[";
-    for (size_t i = 0; i < g_channel_log_channels.size(); ++i) {
-        if (i) js << ",";
-        js << "\"" << json_escape(g_channel_log_channels[i]) << "\"";
-    }
-    js << "]";
-    return js.str();
-}
-
 struct App {
     std::string base_dir;
     std::string web_dir;
@@ -361,15 +290,6 @@ struct App {
     double station_lon = std::numeric_limits<double>::quiet_NaN();
     double station_alt = 0.0;
 };
-
-// ---------------------------------------------------------------------------------------
-// /api/status
-//
-// The web interface asks for the status twice per second. Running `wsrx.sh status` for every
-// request started a dozen short-lived processes each time (bash, date, cat, readlink, ss, ...).
-// The script output is now cached and only refreshed when a pid file or the process behind it
-// changes, or after kStatusRefreshSec.
-// ---------------------------------------------------------------------------------------
 
 static constexpr time_t kStatusRefreshSec = 15;
 
@@ -426,8 +346,6 @@ static void cached_script_status(const App &app, std::string &raw, int &rc) {
     rc = g_status_rc;
 }
 
-// wsrx only polls the live spectrum while someone is looking at it (see liveSpectrumWanted()
-// in wsrx). Every /api/spectrum request renews the request marker, at most every few seconds.
 static void request_live_spectrum(const App &app) {
     static std::mutex m;
     static time_t last_touch = 0;
@@ -992,6 +910,40 @@ private:
     }
 };
 
+
+static bool is_running_wsrx(long pid) {
+    if (pid <= 0) return false;
+    std::ifstream f("/proc/" + std::to_string(pid) + "/comm");
+    std::string comm;
+    if (!f || !std::getline(f, comm)) return false;
+    return comm == "wsrx";
+}
+
+static std::string active_channels_json(const App &app) {
+    const std::string body = read_file_full(app.base_dir + "/data/channels.json", 256 * 1024);
+    if (body.empty()) return "[]";
+    JsonParser parser(body);
+    auto root = parser.parse();
+    if (!root || !root->isObject()) return "[]";
+    const JsonValue *pid = root->get("pid");
+    if (!pid || !pid->isNumber() || !is_running_wsrx(static_cast<long>(pid->num))) return "[]";
+    const JsonValue *channels = root->get("channels");
+    if (!channels || !channels->isArray()) return "[]";
+
+    std::ostringstream js;
+    js << "[";
+    bool first = true;
+    for (const auto &ch : channels->arr) {
+        const JsonValue *freq = ch.get("frequency");
+        if (!freq || !freq->isString()) continue;
+        if (!first) js << ",";
+        first = false;
+        js << "\"" << json_escape(freq->str) << "\"";
+    }
+    js << "]";
+    return js.str();
+}
+
 struct SondeFrame {
     double lat = std::numeric_limits<double>::quiet_NaN();
     double lon = std::numeric_limits<double>::quiet_NaN();
@@ -1000,16 +952,7 @@ struct SondeFrame {
     std::string datetime;
 };
 
-// ---------------------------------------------------------------------------------------
-// Sonde log cache
-//
-// The radiosonde list, the radar, the map and the prediction scheduler used to read and
-// parse every logs/sondes/<serial>.json file completely on every request; the scheduler did
-// that every 5 s even without a browser open. Each file is now parsed once and afterwards
-// only the lines wsrx appended since the last request are read.
-// ---------------------------------------------------------------------------------------
-
-static constexpr size_t kTailFrames = 6;  // sonde_is_descending() looks at the last 6 frames
+static constexpr size_t kTailFrames = 6;  
 
 struct SondeLogSummary {
     std::string type;
@@ -1025,8 +968,8 @@ struct SondeLogSummary {
     double last_vel_v = std::numeric_limits<double>::quiet_NaN();
     long frames = 0;
     bool first_valid = true;
-    std::string track_json;        // track points, already formatted for /api/radiosondes
-    std::deque<SondeFrame> tail;   // last frames, for the prediction scheduler
+    std::string track_json;       
+    std::deque<SondeFrame> tail;  
 };
 
 struct CachedSondeLog {
@@ -1289,8 +1232,6 @@ static std::string build_prediction_json(const std::string &path) {
     return js.str();
 }
 
-// The map asks for every sonde's prediction every 5 s; parse a prediction file only when the
-// scheduler has written a new one.
 struct CachedPredictionJson {
     dev_t dev = 0;
     ino_t ino = 0;
@@ -1791,7 +1732,7 @@ static void handle_client(int fd, const App &app) {
            << ",\"base_dir\":\"" << json_escape(app.base_dir) << "\""
            << ",\"web_dir\":\"" << json_escape(app.web_dir) << "\""
            << ",\"raw\":\"" << json_escape(raw) << "\""
-           << ",\"channels\":" << active_channels_json(app.log_file) << "}";
+           << ",\"channels\":" << active_channels_json(app) << "}";
         send_response(fd, 200, "application/json", js.str());
     } else if (path == "/api/log") {
         int lines = 300;
