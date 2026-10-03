@@ -18,7 +18,7 @@ let lastSondesData = [];
 let mapAzElSerial = null;
 let mapAzElInterval = null;
 const MAP_HOURS = 12;
-const MAP_REFRESH_MS = 5000;
+const MAP_REFRESH_MS = 10000;
 const PREDICTION_COLOR = '#385b80';
 
 const SONDE_FRESH_MAX_AGE_SEC = 180;
@@ -952,7 +952,7 @@ async function refreshAll() {
   if (activeTab === 'radiosondes') {
 
     const now = Date.now();
-    if (now - lastRadiosondesRefresh >= 4000) {
+    if (now - lastRadiosondesRefresh >= 10000) {
       lastRadiosondesRefresh = now;
       await refreshRadiosondesActive();
     }
@@ -1272,7 +1272,8 @@ async function radarDrawFrame() {
 
   let data;
   try {
-    data = await getJson('/api/radiosondes');
+    // Only sondes heard in the last 10 minutes are drawn, so only ask for those.
+    data = await getJson('/api/radiosondes?active_sec=600');
   } catch (e) {
     if (closestEl) closestEl.textContent = 'Closest sonde: could not load data';
     return;
@@ -1327,6 +1328,8 @@ async function radarDrawFrame() {
   }
 }
 
+const RADAR_REFRESH_MS = 10000;
+
 function openRadar() {
   const dialog = document.getElementById('radarDialog');
   if (!dialog) return;
@@ -1334,7 +1337,7 @@ function openRadar() {
   else dialog.setAttribute('open', '');
   radarDrawFrame();
   if (radarInterval) clearInterval(radarInterval);
-  radarInterval = setInterval(radarDrawFrame, 3000);
+  radarInterval = setInterval(radarDrawFrame, RADAR_REFRESH_MS);
 }
 
 function closeRadar() {
