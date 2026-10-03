@@ -147,11 +147,11 @@ static void cleanupOldTempFiles(Logger& log) {
         const auto& entry = *it;
         if (!isWsrxTempFile(entry.path().filename().string())) continue;
         std::error_code fec;
-
+        // symlink_status(): only real files, never follow a link someone placed in /tmp.
         if (!std::filesystem::is_regular_file(entry.symlink_status(fec)) || fec) continue;
         const auto mtime = std::filesystem::last_write_time(entry.path(), fec);
         if (fec || now - mtime <= kTempFileMaxAge) continue;
-
+        // Files of other users can't be removed (sticky /tmp); skip them without a warning.
         if (std::filesystem::remove(entry.path(), fec) && !fec) ++removed;
     }
     if (removed > 0) {
@@ -285,6 +285,7 @@ static std::string makeTempKa9qScript(const Config& cfg, const std::string& deco
     long long hz = freqHz(cfg.frequency_mhz);
     std::string ssrc = ka9qSsrc(cfg.frequency_mhz, 1);
 
+    // Deleted by cleanupOldTempFiles() once it is older than kTempFileMaxAge.
     char tmpl[] = "/tmp/wsrx-ka9q-XXXXXX.sh";
     int fd = mkstemps(tmpl, 3);
     if (fd < 0) {
@@ -910,8 +911,8 @@ struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
     double trigger = NAN;
-    std::vector<size_t> peak_idx;       
-    std::vector<size_t> candidate_idx;  
+    std::vector<size_t> peak_idx;       // strongest peaks (shown in the web interface)
+    std::vector<size_t> candidate_idx;  // strongest peaks that are not decoded yet
     bool used_fallback = false;
 };
 
@@ -1359,6 +1360,35 @@ static bool frequencyAlreadyActiveLocked(const std::vector<std::unique_ptr<Chann
     return false;
 }
 
+static void writeChannelsJson(const std::vector<std::unique_ptr<Channel>>& channels, Logger& log) {
+    const std::filesystem::path data_dir = std::filesystem::path(g_base_dir) / "data";
+    const std::filesystem::path tmp_path = data_dir / "channels.json.tmp";
+    const std::filesystem::path out_path = data_dir / "channels.json";
+    std::error_code ec;
+    std::filesystem::create_directories(data_dir, ec);
+
+    std::ostringstream js;
+    js << "{\"pid\":" << ::getpid() << ",\"updated\":" << static_cast<long long>(std::time(nullptr)) << ",\"channels\":[";
+    for (size_t i = 0; i < channels.size(); ++i) {
+        std::ostringstream freq;
+        freq << channels[i]->cfg.frequency_mhz;  // same format as in the log lines
+        if (i) js << ",";
+        js << "{\"frequency\":\"" << freq.str() << "\",\"decoder\":\"" << decoderLabel(channels[i]->cfg.decoder) << "\"}";
+    }
+    js << "]}\n";
+
+    {
+        std::ofstream out(tmp_path, std::ios::trunc);
+        if (!out) {
+            log.warn("could not write channel list: " + tmp_path.string());
+            return;
+        }
+        out << js.str();
+    }
+    std::filesystem::rename(tmp_path, out_path, ec);
+    if (ec) log.warn("could not publish channel list: " + out_path.string() + ": " + ec.message());
+}
+
 static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
     cfg.sample_rate = effectiveDecoderSampleRate(cfg, cfg.decoder);
 
@@ -1583,6 +1613,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
                         auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender);
                         channels.push_back(std::move(ch));
+                        writeChannelsJson(channels, log);
                     }
                 }
             }
@@ -1748,6 +1779,8 @@ int main(int argc, char** argv) {
         std::thread scan_thread;
         std::thread spectrum_thread;
 
+        writeChannelsJson(channels, log);  // replaces the list of a previous run
+
         spectrum_thread = std::thread(spectrumWorkerThread, std::cref(cfg), std::ref(log));
         scan_thread = std::thread(scanWorkerThread, std::cref(cfg), std::ref(log), std::ref(channels),
                                   std::ref(channels_mutex), std::ref(uploader), std::ref(udp_sender));
@@ -1769,6 +1802,7 @@ int main(int argc, char** argv) {
 
             {
                 std::lock_guard<std::mutex> lock(channels_mutex);
+                bool channels_changed = false;
                 for (auto it = channels.begin(); it != channels.end();) {
                     Channel& ch = **it;
                     bool remove = false;
@@ -1805,10 +1839,12 @@ int main(int argc, char** argv) {
                     if (remove) {
                         stopChannel(ch, log);
                         it = channels.erase(it);
+                        channels_changed = true;
                     } else {
                         ++it;
                     }
                 }
+                if (channels_changed) writeChannelsJson(channels, log);
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1822,6 +1858,7 @@ int main(int argc, char** argv) {
             std::lock_guard<std::mutex> lock(channels_mutex);
             for (auto& ch : channels) stopChannel(*ch, log);
             channels.clear();
+            writeChannelsJson(channels, log);
         }
         uploader.stop();
 
