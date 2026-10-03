@@ -1,11 +1,13 @@
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
@@ -211,34 +213,128 @@ static std::map<std::string, std::string> parse_query(const std::string &q) {
     return m;
 }
 
-static std::string active_channels_from_log(const std::string &log) {
-    std::vector<std::string> channels;
-    std::istringstream iss(log);
-    std::string line;
-    while (std::getline(iss, line)) {
-        const std::string start = "starting decoder channel ";
-        const std::string stop = "stopping decoder channel ";
-        size_t p = line.find(start);
-        if (p != std::string::npos) {
-            p += start.size();
-            size_t e = line.find(' ', p);
-            std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
-            channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
-            channels.push_back(freq);
-        }
-        p = line.find(stop);
-        if (p != std::string::npos) {
-            p += stop.size();
-            size_t e = line.find(' ', p);
-            std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
-            channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
-        }
+// ---------------------------------------------------------------------------------------
+// Incremental file reading
+//
+// wsrx only ever appends to wsrx.log and to the per-sonde logs (or truncates/deletes them as
+// a whole). Instead of re-reading such a file on every request, a FileFollower remembers how
+// far it was read plus the first bytes of the file, and hands out only the lines appended
+// since the last call. A replaced or truncated file is detected and read again from the start.
+// ---------------------------------------------------------------------------------------
+
+static constexpr size_t kFollowHeadBytes = 64;
+
+struct FileFollower {
+    dev_t dev = 0;
+    ino_t ino = 0;
+    off_t offset = 0;   // always at a line boundary
+    std::string head;   // first bytes of the file
+};
+
+// on_reset() is called before the file is read again from the start; the caller drops
+// everything it derived from earlier lines there. on_line(line) gets each new complete line.
+// A last line without newline is only passed on (once) if unterminated_grace_sec >= 0 and the
+// file has not been modified for that many seconds.
+template <typename ResetFn, typename LineFn>
+static void follow_file(FileFollower &ff, const std::string &path, const struct stat &st,
+                        ResetFn &&on_reset, LineFn &&on_line, int unterminated_grace_sec) {
+    bool reset = ff.ino != st.st_ino || ff.dev != st.st_dev || st.st_size < ff.offset;
+    if (!reset && st.st_size == ff.offset) return;
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return;
+
+    if (!reset && !ff.head.empty()) {
+        std::string now_head(ff.head.size(), '\0');
+        f.read(&now_head[0], static_cast<std::streamsize>(now_head.size()));
+        if (static_cast<size_t>(f.gcount()) != now_head.size() || now_head != ff.head) reset = true;
+        f.clear();
     }
+    if (reset) {
+        ff = FileFollower{};
+        ff.dev = st.st_dev;
+        ff.ino = st.st_ino;
+        on_reset();
+    }
+    if (ff.offset == 0) {
+        char buf[kFollowHeadBytes];
+        f.seekg(0);
+        f.read(buf, sizeof(buf));
+        ff.head.assign(buf, static_cast<size_t>(f.gcount()));
+        f.clear();
+    }
+
+    f.seekg(ff.offset);
+    off_t pos = ff.offset;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (f.eof()) {
+            const bool complete_file = pos + static_cast<off_t>(line.size()) == st.st_size;
+            if (unterminated_grace_sec >= 0 && complete_file && time(nullptr) - st.st_mtime >= unterminated_grace_sec) {
+                pos += static_cast<off_t>(line.size());
+                on_line(line);
+            }
+            break;
+        }
+        pos += static_cast<off_t>(line.size()) + 1;
+        on_line(line);
+    }
+    ff.offset = pos;
+}
+
+// ---------------------------------------------------------------------------------------
+// Active channels, derived from the "starting/stopping decoder channel" lines in wsrx.log
+// ---------------------------------------------------------------------------------------
+
+static void apply_channel_log_line(std::vector<std::string> &channels, const std::string &line) {
+    const std::string start = "starting decoder channel ";
+    const std::string stop = "stopping decoder channel ";
+    size_t p = line.find(start);
+    if (p != std::string::npos) {
+        p += start.size();
+        size_t e = line.find(' ', p);
+        std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
+        channels.push_back(freq);
+    }
+    p = line.find(stop);
+    if (p != std::string::npos) {
+        p += stop.size();
+        size_t e = line.find(' ', p);
+        std::string freq = line.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        channels.erase(std::remove(channels.begin(), channels.end(), freq), channels.end());
+    }
+    // A freshly started wsrx has no channels yet (also clears channels of a crashed instance
+    // that never logged its "stopping" lines).
+    static const std::string started = " started";
+    if (line.find("[INFO] wsrx ") != std::string::npos && line.size() >= started.size() &&
+        line.compare(line.size() - started.size(), started.size(), started) == 0) {
+        channels.clear();
+    }
+}
+
+static std::mutex g_channel_log_mutex;
+static FileFollower g_channel_log_follower;
+static std::vector<std::string> g_channel_log_channels;
+
+static std::string active_channels_json(const std::string &log_file) {
+    std::lock_guard<std::mutex> lock(g_channel_log_mutex);
+    struct stat st{};
+    if (stat(log_file.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+        follow_file(g_channel_log_follower, log_file, st,
+                    [] { g_channel_log_channels.clear(); },
+                    [](const std::string &line) { apply_channel_log_line(g_channel_log_channels, line); },
+                    -1);
+    } else {
+        g_channel_log_follower = FileFollower{};
+        g_channel_log_channels.clear();
+    }
+
     std::ostringstream js;
     js << "[";
-    for (size_t i = 0; i < channels.size(); ++i) {
+    for (size_t i = 0; i < g_channel_log_channels.size(); ++i) {
         if (i) js << ",";
-        js << "\"" << json_escape(channels[i]) << "\"";
+        js << "\"" << json_escape(g_channel_log_channels[i]) << "\"";
     }
     js << "]";
     return js.str();
@@ -265,6 +361,87 @@ struct App {
     double station_lon = std::numeric_limits<double>::quiet_NaN();
     double station_alt = 0.0;
 };
+
+// ---------------------------------------------------------------------------------------
+// /api/status
+//
+// The web interface asks for the status twice per second. Running `wsrx.sh status` for every
+// request started a dozen short-lived processes each time (bash, date, cat, readlink, ss, ...).
+// The script output is now cached and only refreshed when a pid file or the process behind it
+// changes, or after kStatusRefreshSec.
+// ---------------------------------------------------------------------------------------
+
+static constexpr time_t kStatusRefreshSec = 15;
+
+static std::string trim_copy(const std::string &s) {
+    const size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    const size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+static std::string process_identity(const std::string &pid) {
+    if (pid.empty() || pid.find_first_not_of("0123456789") != std::string::npos) return "-";
+    const std::string proc = "/proc/" + pid;
+    char buf[4096];
+    const ssize_t n = readlink((proc + "/exe").c_str(), buf, sizeof(buf) - 1);
+    if (n > 0) return std::string(buf, static_cast<size_t>(n));
+    struct stat st{};
+    return stat(proc.c_str(), &st) == 0 ? "?" : "-";
+}
+
+static std::string status_state_key(const App &app) {
+    std::string key;
+    for (const char *name : {"wsrx.pid", "wsrx-web.pid"}) {
+        std::string pid;
+        std::ifstream f(app.base_dir + "/pidfiles/" + name);
+        if (f) std::getline(f, pid);
+        pid = trim_copy(pid);
+        key += pid + "=" + process_identity(pid) + "|";
+    }
+    return key;
+}
+
+static std::mutex g_status_mutex;
+static bool g_status_valid = false;
+static std::string g_status_key;
+static time_t g_status_refreshed = 0;
+static std::string g_status_raw;
+static int g_status_rc = 0;
+
+static void cached_script_status(const App &app, std::string &raw, int &rc) {
+    const std::string key = status_state_key(app);
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    const time_t now = time(nullptr);
+    if (!g_status_valid || key != g_status_key || now < g_status_refreshed ||
+        now - g_status_refreshed >= kStatusRefreshSec) {
+        int code = 0;
+        g_status_raw = run_cmd(shell_quote(app.script) + " status", &code);
+        g_status_rc = code;
+        g_status_refreshed = now;
+        g_status_valid = true;
+        g_status_key = status_state_key(app);  // the script may have removed a stale pid file
+    }
+    raw = g_status_raw;
+    rc = g_status_rc;
+}
+
+// wsrx only polls the live spectrum while someone is looking at it (see liveSpectrumWanted()
+// in wsrx). Every /api/spectrum request renews the request marker, at most every few seconds.
+static void request_live_spectrum(const App &app) {
+    static std::mutex m;
+    static time_t last_touch = 0;
+    const time_t now = time(nullptr);
+    {
+        std::lock_guard<std::mutex> lock(m);
+        if (last_touch != 0 && now >= last_touch && now - last_touch < 5) return;
+        last_touch = now;
+    }
+    const std::string marker = app.base_dir + "/data/live_spectrum.request";
+    if (utimensat(AT_FDCWD, marker.c_str(), nullptr, 0) == 0) return;
+    const int fd = open(marker.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    if (fd >= 0) close(fd);
+}
 
 static std::string http_date() {
     char buf[128];
@@ -823,29 +1000,124 @@ struct SondeFrame {
     std::string datetime;
 };
 
-static std::vector<SondeFrame> load_sonde_frames(const App &app, const std::string &serial_raw) {
-    std::vector<SondeFrame> frames;
-    const std::string serial = sanitize_serial(serial_raw);
-    const std::string path = app.sondes_dir + "/" + serial + ".json";
-    std::ifstream f(path);
-    if (!f) return frames;
+// ---------------------------------------------------------------------------------------
+// Sonde log cache
+//
+// The radiosonde list, the radar, the map and the prediction scheduler used to read and
+// parse every logs/sondes/<serial>.json file completely on every request; the scheduler did
+// that every 5 s even without a browser open. Each file is now parsed once and afterwards
+// only the lines wsrx appended since the last request are read.
+// ---------------------------------------------------------------------------------------
 
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.find('{') == std::string::npos) continue;
-        SondeFrame fr;
-        if (auto v = extract_json_number(line, "lat")) fr.lat = *v;
-        else if (auto v2 = extract_json_number(line, "latitude")) fr.lat = *v2;
-        if (auto v = extract_json_number(line, "lon")) fr.lon = *v;
-        else if (auto v2 = extract_json_number(line, "longitude")) fr.lon = *v2;
-        if (auto v = extract_json_number(line, "alt")) fr.alt = *v;
-        else if (auto v2 = extract_json_number(line, "altitude")) fr.alt = *v2;
-        if (auto v = extract_json_number(line, "vel_v")) fr.v_speed = *v;
-        if (auto v = extract_json_string(line, "datetime")) fr.datetime = *v;
-        else if (auto v2 = extract_json_string(line, "time")) fr.datetime = *v2;
-        frames.push_back(std::move(fr));
+static constexpr size_t kTailFrames = 6;  // sonde_is_descending() looks at the last 6 frames
+
+struct SondeLogSummary {
+    std::string type;
+    bool type_is_subtype = false;
+    std::string first_time;
+    std::string last_time;
+    double first_alt = std::numeric_limits<double>::quiet_NaN();
+    double last_alt = std::numeric_limits<double>::quiet_NaN();
+    double last_lat = std::numeric_limits<double>::quiet_NaN();
+    double last_lon = std::numeric_limits<double>::quiet_NaN();
+    double frequency_mhz = std::numeric_limits<double>::quiet_NaN();
+    double last_vel_h = std::numeric_limits<double>::quiet_NaN();
+    double last_vel_v = std::numeric_limits<double>::quiet_NaN();
+    long frames = 0;
+    bool first_valid = true;
+    std::string track_json;        // track points, already formatted for /api/radiosondes
+    std::deque<SondeFrame> tail;   // last frames, for the prediction scheduler
+};
+
+struct CachedSondeLog {
+    FileFollower follower;
+    SondeLogSummary summary;
+};
+
+static std::mutex g_sonde_cache_mutex;
+static std::map<std::string, CachedSondeLog> g_sonde_cache;  // key: file path
+
+static bool looksLikeSondeSubtypeName(const std::string& s) {
+    if (s.empty()) return false;
+    for (unsigned char c : s) {
+        if (c < '0' || c > '9') return true;
     }
-    return frames;
+    return false;
+}
+
+static void sonde_summary_add_line(SondeLogSummary &s, const std::string &line) {
+    if (line.find('{') == std::string::npos) return;
+    s.frames++;
+    if (auto t = extract_json_string(line, "subtype"); t && looksLikeSondeSubtypeName(*t)) {
+        s.type = *t;
+        s.type_is_subtype = true;
+    } else if (!s.type_is_subtype && s.type.empty()) {
+        if (auto t2 = extract_json_string(line, "type")) s.type = *t2;
+    }
+    auto alt = extract_json_number(line, "alt");
+    if (!alt) alt = extract_json_number(line, "altitude");
+    auto dt = extract_json_string(line, "datetime");
+    if (!dt) dt = extract_json_string(line, "time");
+    auto lat = extract_json_number(line, "lat");
+    if (!lat) lat = extract_json_number(line, "latitude");
+    auto lon = extract_json_number(line, "lon");
+    if (!lon) lon = extract_json_number(line, "longitude");
+    auto freq = extract_json_number(line, "wsrx_frequency");
+    auto vel_h = extract_json_number(line, "vel_h");
+    auto vel_v = extract_json_number(line, "vel_v");
+
+    if (s.first_valid) {
+        if (alt) s.first_alt = *alt;
+        if (dt) s.first_time = *dt;
+        s.first_valid = false;
+    }
+    if (alt) s.last_alt = *alt;
+    if (dt) s.last_time = *dt;
+    if (lat) s.last_lat = *lat;
+    if (lon) s.last_lon = *lon;
+    if (freq) s.frequency_mhz = *freq;
+    if (vel_h) s.last_vel_h = *vel_h;
+    if (vel_v) s.last_vel_v = *vel_v;
+
+    if (lat && lon) {
+        std::ostringstream tp;
+        tp << "[" << std::fixed << std::setprecision(6) << *lat << "," << *lon << ",";
+        if (alt && std::isfinite(*alt)) tp << std::setprecision(1) << *alt; else tp << "null";
+        tp << ",\"" << json_escape(dt ? *dt : std::string()) << "\"]";
+        if (!s.track_json.empty()) s.track_json += ',';
+        s.track_json += tp.str();
+    }
+
+    SondeFrame fr;
+    if (lat) fr.lat = *lat;
+    if (lon) fr.lon = *lon;
+    if (alt) fr.alt = *alt;
+    if (vel_v) fr.v_speed = *vel_v;
+    if (dt) fr.datetime = *dt;
+    s.tail.push_back(std::move(fr));
+    if (s.tail.size() > kTailFrames) s.tail.pop_front();
+}
+
+// Brings the cached summary of one sonde log up to date. Caller holds g_sonde_cache_mutex.
+static const SondeLogSummary *sonde_cache_refresh_locked(const std::string &path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+        g_sonde_cache.erase(path);
+        return nullptr;
+    }
+    CachedSondeLog &c = g_sonde_cache[path];
+    follow_file(c.follower, path, st,
+                [&c] { c.summary = SondeLogSummary{}; },
+                [&c](const std::string &line) { sonde_summary_add_line(c.summary, line); },
+                2);
+    return &c.summary;
+}
+
+static std::vector<SondeFrame> sonde_tail_frames(const std::string &path) {
+    std::lock_guard<std::mutex> lock(g_sonde_cache_mutex);
+    const SondeLogSummary *s = sonde_cache_refresh_locked(path);
+    if (s == nullptr) return {};
+    return std::vector<SondeFrame>(s->tail.begin(), s->tail.end());
 }
 
 static bool sonde_is_descending(const std::vector<SondeFrame> &frames) {
@@ -884,8 +1156,7 @@ static std::string predict_cache_path(const App &app, const std::string &serial)
     return app.base_dir + "/data/prediction/" + sanitize_serial(serial) + ".json";
 }
 
-static void update_prediction_for_sonde(const App &app, const std::string &serial) {
-    auto frames = load_sonde_frames(app, serial);
+static void update_prediction_for_sonde(const App &app, const std::string &serial, const std::vector<SondeFrame> &frames) {
     if (frames.empty()) return;
     const SondeFrame &last = frames.back();
     if (!std::isfinite(last.lat) || !std::isfinite(last.lon) || !std::isfinite(last.alt) || !std::isfinite(last.v_speed)) return;
@@ -984,8 +1255,8 @@ static std::optional<PredictionOutput> extract_prediction_output(const JsonValue
     return out;
 }
 
-static std::string prediction_json_for_serial(const App &app, const std::string &serial) {
-    std::string body = read_file_full(predict_cache_path(app, serial), 2 * 1024 * 1024);
+static std::string build_prediction_json(const std::string &path) {
+    std::string body = read_file_full(path, 2 * 1024 * 1024);
     if (body.empty()) return "null";
 
     JsonParser parser(body);
@@ -1018,6 +1289,57 @@ static std::string prediction_json_for_serial(const App &app, const std::string 
     return js.str();
 }
 
+// The map asks for every sonde's prediction every 5 s; parse a prediction file only when the
+// scheduler has written a new one.
+struct CachedPredictionJson {
+    dev_t dev = 0;
+    ino_t ino = 0;
+    off_t size = 0;
+    struct timespec mtime{};
+    time_t last_used = 0;
+    std::string json;
+};
+
+static std::mutex g_prediction_json_mutex;
+static std::map<std::string, CachedPredictionJson> g_prediction_json_cache;
+
+static std::string prediction_json_for_serial(const App &app, const std::string &serial) {
+    const std::string path = predict_cache_path(app, serial);
+    const time_t now = time(nullptr);
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0) {
+        std::lock_guard<std::mutex> lock(g_prediction_json_mutex);
+        g_prediction_json_cache.erase(path);
+        return "null";
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_prediction_json_mutex);
+        auto it = g_prediction_json_cache.find(path);
+        if (it != g_prediction_json_cache.end() && it->second.dev == st.st_dev && it->second.ino == st.st_ino &&
+            it->second.size == st.st_size && it->second.mtime.tv_sec == st.st_mtim.tv_sec &&
+            it->second.mtime.tv_nsec == st.st_mtim.tv_nsec) {
+            it->second.last_used = now;
+            return it->second.json;
+        }
+    }
+
+    std::string json = build_prediction_json(path);
+
+    std::lock_guard<std::mutex> lock(g_prediction_json_mutex);
+    for (auto it = g_prediction_json_cache.begin(); it != g_prediction_json_cache.end();) {
+        if (now - it->second.last_used > 3600) it = g_prediction_json_cache.erase(it);
+        else ++it;
+    }
+    CachedPredictionJson &c = g_prediction_json_cache[path];
+    c.dev = st.st_dev;
+    c.ino = st.st_ino;
+    c.size = st.st_size;
+    c.mtime = st.st_mtim;
+    c.last_used = now;
+    c.json = json;
+    return json;
+}
+
 static bool serial_is_undecoded(const std::string &serial) {
     int run = 0;
     for (unsigned char c : serial) {
@@ -1047,7 +1369,8 @@ static void prediction_scheduler_thread(App app) {
         for (const auto &entry : fs::directory_iterator(app.sondes_dir, ec)) {
             if (ec) break;
             if (g_stop) break;
-            if (!entry.is_regular_file(ec)) continue;
+            std::error_code fec;
+            if (!entry.is_regular_file(fec)) continue;
             auto path = entry.path();
             if (path.extension() != ".json") continue;
 
@@ -1067,44 +1390,19 @@ static void prediction_scheduler_thread(App app) {
             bool have_cache = stat(cache_path.c_str(), &cache_st) == 0;
             if (have_cache && (now - cache_st.st_mtime) < PREDICT_MIN_INTERVAL_SEC) continue;
 
-            update_prediction_for_sonde(app, serial);
+            // Only the newest frames are needed; the cache reads just what was appended.
+            update_prediction_for_sonde(app, serial, sonde_tail_frames(path.string()));
         }
     }
 }
 
-static bool looksLikeSondeSubtypeName(const std::string& s) {
-    if (s.empty()) return false;
-    for (unsigned char c : s) {
-        if (c < '0' || c > '9') return true;
-    }
-    return false;
-}
-
 static std::string radiosondes_json(const App &app, long long max_age_sec, bool include_track = false) {
     namespace fs = std::filesystem;
-    struct TrackPoint {
-        double lat;
-        double lon;
-        double alt;
-        std::string time;
-    };
     struct Item {
         std::string serial;
-        std::string type;
-        bool type_is_subtype = false;
-        std::string first_time;
-        std::string last_time;
-        double first_alt = std::numeric_limits<double>::quiet_NaN();
-        double last_alt = std::numeric_limits<double>::quiet_NaN();
-        double last_lat = std::numeric_limits<double>::quiet_NaN();
-        double last_lon = std::numeric_limits<double>::quiet_NaN();
-        double frequency_mhz = std::numeric_limits<double>::quiet_NaN();
-        double last_vel_h = std::numeric_limits<double>::quiet_NaN();
-        double last_vel_v = std::numeric_limits<double>::quiet_NaN();
         uintmax_t size = 0;
-        long frames = 0;
         std::time_t modified = 0;
-        std::vector<TrackPoint> track;
+        const SondeLogSummary *s = nullptr;
     };
 
     std::vector<Item> items;
@@ -1115,19 +1413,26 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
 
     const std::time_t now = std::time(nullptr);
 
+    // Held while the answer is built: the items point into the cache.
+    std::lock_guard<std::mutex> cache_lock(g_sonde_cache_mutex);
+    std::set<std::string> present;
+
     for (const auto &entry : fs::directory_iterator(app.sondes_dir, ec)) {
         if (ec) break;
-        if (!entry.is_regular_file(ec)) continue;
+        std::error_code fec;
+        if (!entry.is_regular_file(fec)) continue;
         auto path = entry.path();
         if (path.extension() != ".json") continue;
+        present.insert(path.string());
 
         Item item;
         item.serial = strip_json_ext(path.filename().string());
         if (serial_is_undecoded(item.serial)) continue; // e.g. DFM's "Dxxxxxx" placeholder, real serial not decoded yet
-        item.size = entry.file_size(ec);
+        item.size = entry.file_size(fec);
 
-        auto ftime = entry.last_write_time(ec);
-        if (!ec) {
+        std::error_code mtime_ec;
+        auto ftime = entry.last_write_time(mtime_ec);
+        if (!mtime_ec) {
             auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                 ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
             item.modified = std::chrono::system_clock::to_time_t(sctp);
@@ -1135,53 +1440,14 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
 
         if (max_age_sec > 0 && item.modified > 0 && (now - item.modified) > max_age_sec) continue;
 
-        std::ifstream f(path);
-        std::string line;
-        bool first_valid = true;
-        while (std::getline(f, line)) {
-            if (line.find('{') == std::string::npos) continue;
-            item.frames++;
-            if (auto t = extract_json_string(line, "subtype"); t && looksLikeSondeSubtypeName(*t)) {
-                item.type = *t;
-                item.type_is_subtype = true;
-            } else if (!item.type_is_subtype && item.type.empty()) {
-                if (auto t2 = extract_json_string(line, "type")) item.type = *t2;
-            }
-            auto alt = extract_json_number(line, "alt");
-            if (!alt) alt = extract_json_number(line, "altitude");
-            auto dt = extract_json_string(line, "datetime");
-            if (!dt) dt = extract_json_string(line, "time");
-            auto lat = extract_json_number(line, "lat");
-            if (!lat) lat = extract_json_number(line, "latitude");
-            auto lon = extract_json_number(line, "lon");
-            if (!lon) lon = extract_json_number(line, "longitude");
-            auto freq = extract_json_number(line, "wsrx_frequency");
-            auto vel_h = extract_json_number(line, "vel_h");
-            auto vel_v = extract_json_number(line, "vel_v");
+        item.s = sonde_cache_refresh_locked(path.string());
+        if (item.s != nullptr && item.s->frames > 0) items.push_back(std::move(item));
+    }
 
-            if (first_valid) {
-                if (alt) item.first_alt = *alt;
-                if (dt) item.first_time = *dt;
-                first_valid = false;
-            }
-            if (alt) item.last_alt = *alt;
-            if (dt) item.last_time = *dt;
-            if (lat) item.last_lat = *lat;
-            if (lon) item.last_lon = *lon;
-            if (freq) item.frequency_mhz = *freq;
-            if (vel_h) item.last_vel_h = *vel_h;
-            if (vel_v) item.last_vel_v = *vel_v;
-
-            if (include_track && lat && lon) {
-                TrackPoint tp;
-                tp.lat = *lat;
-                tp.lon = *lon;
-                tp.alt = alt ? *alt : std::numeric_limits<double>::quiet_NaN();
-                tp.time = dt ? *dt : "";
-                item.track.push_back(tp);
-            }
-        }
-        if (item.frames > 0) items.push_back(item);
+    // Forget logs that were deleted in the meantime.
+    for (auto it = g_sonde_cache.begin(); it != g_sonde_cache.end();) {
+        if (present.count(it->first) != 0) ++it;
+        else it = g_sonde_cache.erase(it);
     }
 
     std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
@@ -1191,12 +1457,13 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
     std::ostringstream js;
     js << "{\"radiosondes\":[";
     for (size_t i = 0; i < items.size(); ++i) {
-        const auto &it = items[i];
+        const auto &item = items[i];
+        const SondeLogSummary &it = *item.s;
         if (i) js << ",";
-        js << "{\"serial\":\"" << json_escape(it.serial) << "\"";
+        js << "{\"serial\":\"" << json_escape(item.serial) << "\"";
         js << ",\"type\":\"" << json_escape(it.type) << "\"";
         js << ",\"frames\":" << it.frames;
-        js << ",\"size\":" << it.size;
+        js << ",\"size\":" << item.size;
         js << ",\"first_altitude\":";
         if (std::isfinite(it.first_alt)) js << std::fixed << std::setprecision(1) << it.first_alt; else js << "null";
         js << ",\"last_altitude\":";
@@ -1238,25 +1505,17 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
         }
         js << ",\"first_time\":\"" << json_escape(it.first_time) << "\"";
         js << ",\"last_time\":\"" << json_escape(it.last_time) << "\"";
-        js << ",\"modified\":" << static_cast<long long>(it.modified);
+        js << ",\"modified\":" << static_cast<long long>(item.modified);
         js << ",\"launchsite\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon)) {
-            auto site = getLaunchsiteCached(it.serial);
+            auto site = getLaunchsiteCached(item.serial);
             if (site && !site->empty()) js << "\"" << json_escape(*site) << "\""; else js << "null";
         } else {
             js << "null";
         }
         if (include_track) {
-            js << ",\"track\":[";
-            for (size_t j = 0; j < it.track.size(); ++j) {
-                if (j) js << ",";
-                const auto &tp = it.track[j];
-                js << "[" << std::fixed << std::setprecision(6) << tp.lat << "," << tp.lon << ",";
-                if (std::isfinite(tp.alt)) js << std::setprecision(1) << tp.alt; else js << "null";
-                js << ",\"" << json_escape(tp.time) << "\"]";
-            }
-            js << "]";
-            js << ",\"prediction\":" << prediction_json_for_serial(app, it.serial);
+            js << ",\"track\":[" << it.track_json << "]";
+            js << ",\"prediction\":" << prediction_json_for_serial(app, item.serial);
         }
         js << "}";
     }
@@ -1519,20 +1778,20 @@ static void handle_client(int fd, const App &app) {
 
     if (path == "/api/status") {
         int rc = 0;
-        std::string raw = run_cmd(shell_quote(app.script) + " status", &rc);
+        std::string raw;
+        cached_script_status(app, raw, rc);
         bool running = rc == 0;
         std::string pid;
         std::string pidfile = app.base_dir + "/pidfiles/wsrx.pid";
         if (file_exists(pidfile)) pid = read_file(pidfile, 64);
         pid.erase(std::remove(pid.begin(), pid.end(), '\n'), pid.end());
-        std::string log = read_file(app.log_file, 512 * 1024);
         std::ostringstream js;
         js << "{\"running\":" << (running ? "true" : "false")
            << ",\"pid\":\"" << json_escape(pid) << "\""
            << ",\"base_dir\":\"" << json_escape(app.base_dir) << "\""
            << ",\"web_dir\":\"" << json_escape(app.web_dir) << "\""
            << ",\"raw\":\"" << json_escape(raw) << "\""
-           << ",\"channels\":" << active_channels_from_log(log) << "}";
+           << ",\"channels\":" << active_channels_json(app.log_file) << "}";
         send_response(fd, 200, "application/json", js.str());
     } else if (path == "/api/log") {
         int lines = 300;
@@ -1579,6 +1838,7 @@ static void handle_client(int fd, const App &app) {
             send_response(fd, 200, "text/plain", read_file(app.blacklist_file, 256 * 1024));
         }
     } else if (path == "/api/spectrum") {
+        request_live_spectrum(app);
         std::string t = read_file(app.spectrum_file, 2 * 1024 * 1024);
         if (t.empty() && !file_exists(app.spectrum_file)) {
             std::string legacy = app.base_dir + "/data/scan_spectrum.json";
