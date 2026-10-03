@@ -6,9 +6,17 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace {
+
+const std::regex* cachedRegex(const std::string& pattern) {
+    thread_local std::unordered_map<std::string, std::regex> cache;
+    auto it = cache.find(pattern);
+    if (it == cache.end()) it = cache.emplace(pattern, std::regex(pattern)).first;
+    return &it->second;
+}
 
 double normalizeFrequencyToMhz(double v) {
     if (v >= 1e6) return v / 1e6;
@@ -352,6 +360,7 @@ std::string hhmmssFromIsoUtc(const std::string& iso) {
 }
 
 std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line, double frequency_mhz, const std::string& receiver) {
+    if (line.find_first_not_of(" \t\r") == std::string::npos) return std::nullopt;
     {
         static const std::regex hdr_re(R"(^\s*\[\s*([0-9]+)\]\s*\(([A-Za-z0-9_.-]+)\))");
         std::smatch m;
@@ -451,7 +460,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     }
 
     if (f.serial.empty()) {
-        std::regex serial_re("\\b([A-Z][0-9A-Z]{5,10}|D[0-9A-Z]{6,10}|ME[0-9A-Z]{4,10})\\b");
+        static const std::regex serial_re("\\b([A-Z][0-9A-Z]{5,10}|D[0-9A-Z]{6,10}|ME[0-9A-Z]{4,10})\\b");
         std::smatch m;
         if (std::regex_search(line, m, serial_re)) {
             f.serial = m[1];
@@ -510,13 +519,13 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
 std::optional<double> TelemetryParser::extractNumber(const std::string& text, const std::string& key) {
     std::smatch m;
 
-    std::regex quoted_re("\\\"" + key + "\\\"\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
-    if (std::regex_search(text, m, quoted_re)) {
+    const std::regex* quoted_re = cachedRegex("\\\"" + key + "\\\"\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
+    if (std::regex_search(text, m, *quoted_re)) {
         return std::stod(m[1]);
     }
 
-    std::regex plain_re("(^|[^A-Za-z0-9_])" + key + "\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
-    if (std::regex_search(text, m, plain_re)) {
+    const std::regex* plain_re = cachedRegex("(^|[^A-Za-z0-9_])" + key + "\\s*[:=]\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
+    if (std::regex_search(text, m, *plain_re)) {
         return std::stod(m[2]);
     }
 
@@ -526,13 +535,13 @@ std::optional<double> TelemetryParser::extractNumber(const std::string& text, co
 std::optional<std::string> TelemetryParser::extractString(const std::string& text, const std::string& key) {
     std::smatch m;
 
-    std::regex quoted_re("\\\"" + key + "\\\"\\s*[:=]\\s*\\\"([^\\\"]*)\\\"");
-    if (std::regex_search(text, m, quoted_re)) {
+    const std::regex* quoted_re = cachedRegex("\\\"" + key + "\\\"\\s*[:=]\\s*\\\"([^\\\"]*)\\\"");
+    if (std::regex_search(text, m, *quoted_re)) {
         return m[1];
     }
 
-    std::regex plain_re("(^|[^A-Za-z0-9_])" + key + "\\s*[:=]\\s*([A-Za-z0-9_.-]+)");
-    if (std::regex_search(text, m, plain_re)) {
+    const std::regex* plain_re = cachedRegex("(^|[^A-Za-z0-9_])" + key + "\\s*[:=]\\s*([A-Za-z0-9_.-]+)");
+    if (std::regex_search(text, m, *plain_re)) {
         return m[2];
     }
 

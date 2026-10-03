@@ -67,9 +67,6 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
-// Frequencies need kHz resolution (3 decimals in MHz), 1 decimal (100 kHz
-// steps) is too coarse and causes the uploaded frequency to drift from the
-// actual sonde frequency.
 void addNumber3(std::ostringstream& oss, bool& first, const std::string& key, double value) {
     addComma(oss, first);
     oss << '"' << key << "\":" << std::fixed << std::setprecision(3) << value << std::defaultfloat;
@@ -129,9 +126,6 @@ bool hasGpsFix(const TelemetryFrame& frame) {
 }
 
 bool validTypeSerial(const TelemetryFrame& frame) {
-    // Gross-/Kleinschreibung-unabhaengig, da subtype-Werte (z.B. "iMet-4",
-    // "iMet-1-RS", "RS41-SGP") den Typ 1:1 ersetzen und dabei nicht zwingend
-    // durchgehend Grossbuchstaben verwenden.
     const std::string type = upperCopy(frame.type);
     const auto& serial = frame.serial;
 
@@ -233,7 +227,6 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     if (!std::isnan(frame.humidity_percent)) addNumber1(oss, first, "humidity", frame.humidity_percent);
     if (!std::isnan(frame.pressure_hpa)) addNumber1(oss, first, "pressure", frame.pressure_hpa);
     if (!std::isnan(frame.battery_v)) addNumber1(oss, first, "voltage", frame.battery_v);
-    if (!std::isnan(frame.rssi_db)) addNumber1(oss, first, "rssi", frame.rssi_db);
     if (!std::isnan(frame.tx_power_raw)) addInt(oss, first, "tx_power", static_cast<int>(std::llround(frame.tx_power_raw)));
     if (!std::isnan(frame.burstkilltimer_sec)) addInt(oss, first, "burstkilltimer", static_cast<int>(std::llround(frame.burstkilltimer_sec)));
     if (!std::isnan(frame.killtimer_sec)) addInt(oss, first, "killtimer", static_cast<int>(std::llround(frame.killtimer_sec)));

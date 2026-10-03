@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-constexpr const char* WSRX_VERSION = "0.1.08";
+constexpr const char* WSRX_VERSION = "0.1.09";
 
 struct RadioBackend {
     std::string name = "default";
@@ -59,7 +59,7 @@ struct Config {
     double scan_max_mhz = 406.0;
     int scan_step_khz = 10;
     double scan_threshold_db = 8.0;
-    int scan_interval_sec = 20;
+    int scan_interval_sec = 30;
     int scan_tune_timeout_sec = 3;
     int scan_detect_dwell_sec = 5;
     int scan_spectrum_dwell_sec = 5;
@@ -98,4 +98,3 @@ struct Config {
 
     static Config load(const Args& args, const std::string& config_file);
 };
-

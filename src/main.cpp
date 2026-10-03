@@ -124,6 +124,41 @@ static void cleanupOldSondeLogs(Logger& log) {
     }
 }
 
+static constexpr auto kTempFileMaxAge = std::chrono::minutes(10);
+
+static bool isWsrxTempFile(const std::string& name) {
+    auto endsWith = [&name](const std::string& suffix) {
+        return name.size() >= suffix.size() &&
+               name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+    if (startsWith(name, "wsrx-ka9q-")) return endsWith(".sh");
+    if (startsWith(name, "wsrx_power_") || startsWith(name, "wsrx_live_power_")) {
+        return endsWith(".csv") || endsWith(".err");
+    }
+    return false;
+}
+
+static void cleanupOldTempFiles(Logger& log) {
+    const std::filesystem::path dir = "/tmp";
+    std::error_code ec;
+    const auto now = std::filesystem::file_time_type::clock::now();
+    size_t removed = 0;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const auto& entry = *it;
+        if (!isWsrxTempFile(entry.path().filename().string())) continue;
+        std::error_code fec;
+
+        if (!std::filesystem::is_regular_file(entry.symlink_status(fec)) || fec) continue;
+        const auto mtime = std::filesystem::last_write_time(entry.path(), fec);
+        if (fec || now - mtime <= kTempFileMaxAge) continue;
+
+        if (std::filesystem::remove(entry.path(), fec) && !fec) ++removed;
+    }
+    if (removed > 0) {
+        log.info("deleted " + std::to_string(removed) + " old temporary file(s) from /tmp");
+    }
+}
+
 static constexpr auto kLogTruncateInterval = std::chrono::hours(12);
 
 static void truncateLogsIfDue(Logger& log) {
@@ -875,11 +910,21 @@ struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
     double trigger = NAN;
-    std::vector<size_t> peak_idx;
+    std::vector<size_t> peak_idx;       
+    std::vector<size_t> candidate_idx;  
     bool used_fallback = false;
 };
 
-static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const RadioBackend& radio, Logger& log, bool allow_fallback_candidates) {
+static bool isNearActiveChannel(const Config& cfg, const std::vector<double>& active_mhz, double frequency_hz) {
+    const double window_mhz = cfg.scan_active_skip_width_khz / 1000.0;
+    for (double mhz : active_mhz) {
+        if (std::fabs(mhz - frequency_hz / 1e6) <= window_mhz) return true;
+    }
+    return false;
+}
+
+static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const RadioBackend& radio, Logger& log, bool allow_fallback_candidates,
+                                                  const std::vector<double>& active_mhz) {
     BackendScanResult out;
     const std::string powers = "powers";
     long long start_hz = freqHz(radio.scan_min_mhz);
@@ -1002,6 +1047,12 @@ static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const Radio
         });
     }
 
+    for (size_t idx : peak_idx) {
+        if (static_cast<int>(out.candidate_idx.size()) >= cfg.scan_max_peaks) break;
+        if (isNearActiveChannel(cfg, active_mhz, spectrum[idx].frequency_hz)) continue;
+        out.candidate_idx.push_back(idx);
+    }
+
     if (static_cast<int>(peak_idx.size()) > cfg.scan_max_peaks) peak_idx.resize(static_cast<size_t>(cfg.scan_max_peaks));
 
     for (size_t idx : peak_idx) {
@@ -1019,7 +1070,8 @@ static BackendScanResult runKa9qPowerScanForRadio(const Config& cfg, const Radio
     return out;
 }
 
-static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates) {
+static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& log, bool allow_fallback_candidates,
+                                                   const std::vector<double>& active_mhz) {
     std::vector<SpectrumBin> merged_spectrum;
     std::vector<size_t> merged_peak_idx;
     double merged_nf = NAN;
@@ -1041,7 +1093,7 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
     };
 
     for (const auto& radio : cfg.radios) {
-        BackendScanResult res = runKa9qPowerScanForRadio(cfg, radio, log, allow_fallback_candidates);
+        BackendScanResult res = runKa9qPowerScanForRadio(cfg, radio, log, allow_fallback_candidates, active_mhz);
         if (res.spectrum.empty()) continue;
 
         const size_t offset = merged_spectrum.size();
@@ -1051,7 +1103,7 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         if (std::isfinite(res.trigger) && (!std::isfinite(merged_trigger) || res.trigger < merged_trigger)) merged_trigger = res.trigger;
         any_fallback = any_fallback || res.used_fallback;
 
-        for (size_t idx : res.peak_idx) appendUnique(res.spectrum[idx].frequency_hz, &radio);
+        for (size_t idx : res.candidate_idx) appendUnique(res.spectrum[idx].frequency_hz, &radio);
     }
 
     if (!merged_spectrum.empty()) {
@@ -1290,14 +1342,12 @@ struct Channel {
     Config cfg;
     DecoderProcess decoder;
     TelemetryParser parser;
-    double latest_rssi_db = NAN;
     bool got_frame = false;
     std::chrono::steady_clock::time_point started;
     std::chrono::steady_clock::time_point last_frame;
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> reader_exited{false};
     std::thread reader_thread;
-    std::thread rssi_poll_thread;
     std::mutex state_mutex;
 };
 
@@ -1307,64 +1357,6 @@ static bool frequencyAlreadyActiveLocked(const std::vector<std::unique_ptr<Chann
         if (std::fabs(ch->cfg.frequency_mhz - mhz) <= window_mhz) return true;
     }
     return false;
-}
-
-static std::optional<double> pollChannelPowerDb(const Config& cfg, Logger& log) {
-    const std::string powers = "powers";
-    const long long center_hz = freqHz(cfg.frequency_mhz);
-    const long long window_hz = static_cast<long long>(cfg.ka9q_high_hz) - static_cast<long long>(cfg.ka9q_low_hz);
-    if (window_hz <= 0) return std::nullopt;
-
-
-    constexpr int kRssiPollBins = 8;
-    constexpr int kRssiPollDwellSec = 1;
-    const long long bin_width_hz = std::max<long long>(1, window_hz / kRssiPollBins);
-
-    const std::string tag = std::to_string(::getpid()) + "_" + std::to_string(center_hz);
-    const std::string log_path = "/tmp/wsrx_rssi_" + tag + ".csv";
-    const std::string err_path = "/tmp/wsrx_rssi_" + tag + ".err";
-    const std::string ssrc = ka9qSsrc(cfg.frequency_mhz, 2);
-
-    std::ostringstream cmd;
-    cmd << "timeout " << (kRssiPollDwellSec + 5) << " "
-        << powers << " " << shellQuote(cfg.ka9q_radio) << " "
-        << "-f " << center_hz << " "
-        << "-w " << bin_width_hz << " "
-        << "-b " << kRssiPollBins << " "
-        << "-i " << kRssiPollDwellSec << " "
-        << "-s " << ssrc << " "
-        << "-c 2 > " << shellQuote(log_path) << " 2>" << shellQuote(err_path);
-
-    if (cfg.verbose || cfg.decoder_debug) log.debug("rssi poll command: " + cmd.str());
-
-    int rc = 0;
-    {
-        std::lock_guard<std::mutex> powers_lock(g_powers_mutex);
-        rc = std::system(cmd.str().c_str());
-    }
-    std::remove(err_path.c_str());
-    if (rc != 0) {
-        std::remove(log_path.c_str());
-        return std::nullopt;
-    }
-
-    std::vector<SpectrumBin> bins = readKa9qPowerCsv(log_path, log);
-    std::remove(log_path.c_str());
-    if (bins.empty()) return std::nullopt;
-
-    double best = bins.front().power_db;
-    for (const auto& b : bins) best = std::max(best, b.power_db);
-    return best;
-}
-
-static void channelRssiPollThread(Channel* ch, Logger& log) {
-    while (!g_shutdown && !ch->stop_requested.load()) {
-        auto db = pollChannelPowerDb(ch->cfg, log);
-        if (db) ch->latest_rssi_db = *db;
-        for (int i = 0; i < 20 && !g_shutdown && !ch->stop_requested.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
 }
 
 static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
@@ -1396,42 +1388,32 @@ static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
 }
 
 static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log, Uploader& uploader, UdpSender& udp_sender) {
+    constexpr int kReadWaitMs = 250;
     while (!g_shutdown && !ch->stop_requested.load()) {
-        bool read_any = false;
-        while (!g_shutdown && !ch->stop_requested.load()) {
-            auto line = ch->decoder.readLine();
-            if (!line) break;
-            read_any = true;
-
-            if (base_cfg.verbose && shouldLogDecoderLine(*line, base_cfg.decoder_debug)) {
-                std::ostringstream prefix;
-                prefix << "decoder " << ch->cfg.frequency_mhz << ": " << *line;
-                log.debug(prefix.str());
-            }
-            auto frame = ch->parser.parseLine(*line, ch->cfg.frequency_mhz, base_cfg.callsign);
-            if (frame) {
-                if (!std::isnan(ch->latest_rssi_db)) frame->rssi_db = ch->latest_rssi_db;
-                {
-                    std::lock_guard<std::mutex> lock(ch->state_mutex);
-                    ch->got_frame = true;
-                    ch->last_frame = std::chrono::steady_clock::now();
-                }
-
-                std::ostringstream msg;
-                msg << frame->type << " " << frame->serial
-                    << " freq=" << frame->frequency_mhz
-                    << " lat=" << frame->lat
-                    << " lon=" << frame->lon
-                    << " alt=" << frame->alt_m;
-
-                appendDecoderJsonLog(*frame);
-                uploader.sendTelemetry(*frame);
-                udp_sender.sendTelemetry(*frame);
-            }
+        auto line = ch->decoder.readLine(kReadWaitMs);
+        if (!line) {
+            if (!ch->decoder.isRunning()) break;
+            if (ch->decoder.atEof()) std::this_thread::sleep_for(std::chrono::milliseconds(kReadWaitMs));
+            continue;
         }
 
-        if (!ch->decoder.isRunning()) break;
-        if (!read_any) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (base_cfg.verbose && shouldLogDecoderLine(*line, base_cfg.decoder_debug)) {
+            std::ostringstream prefix;
+            prefix << "decoder " << ch->cfg.frequency_mhz << ": " << *line;
+            log.debug(prefix.str());
+        }
+        auto frame = ch->parser.parseLine(*line, ch->cfg.frequency_mhz, base_cfg.callsign);
+        if (!frame) continue;
+
+        {
+            std::lock_guard<std::mutex> lock(ch->state_mutex);
+            ch->got_frame = true;
+            ch->last_frame = std::chrono::steady_clock::now();
+        }
+
+        appendDecoderJsonLog(*frame);
+        uploader.sendTelemetry(*frame);
+        udp_sender.sendTelemetry(*frame);
     }
 
     ch->reader_exited.store(true);
@@ -1441,10 +1423,6 @@ static std::unique_ptr<Channel> startChannelWithReader(Config cfg, const Config&
     auto ch = startChannelProcess(cfg, log);
     Channel* ptr = ch.get();
     ptr->reader_thread = std::thread(channelReaderThread, ptr, std::cref(base_cfg), std::ref(log), std::ref(uploader), std::ref(udp_sender));
-    // No live radio to poll in -wav (offline file) mode.
-    if (cfg.wav_file.empty()) {
-        ptr->rssi_poll_thread = std::thread(channelRssiPollThread, ptr, std::ref(log));
-    }
     return ch;
 }
 
@@ -1455,21 +1433,22 @@ static void stopChannel(Channel& ch, Logger& log) {
     ch.stop_requested.store(true);
     ch.decoder.stop();
     if (ch.reader_thread.joinable()) ch.reader_thread.join();
-    if (ch.rssi_poll_thread.joinable()) ch.rssi_poll_thread.join();
     closeKa9qChannel(ch.cfg, log);
 }
 
 static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<std::unique_ptr<Channel>>& channels,
                                     std::mutex& channels_mutex, Uploader& uploader, UdpSender& udp_sender) {
     size_t active_count = 0;
+    std::vector<double> active_mhz;
     {
         std::lock_guard<std::mutex> lock(channels_mutex);
         active_count = channels.size();
+        for (const auto& ch : channels) active_mhz.push_back(ch->cfg.frequency_mhz);
     }
     if (static_cast<int>(active_count) >= cfg.scan_max_channels) return;
 
     const bool allow_fallback_candidates = (active_count == 0) || cfg.scan_fallback_when_active;
-    std::vector<ScanCandidate> peaks = runKa9qPowerScan(cfg, log, allow_fallback_candidates);
+    std::vector<ScanCandidate> peaks = runKa9qPowerScan(cfg, log, allow_fallback_candidates, active_mhz);
     if (peaks.empty()) return;
 
     struct Candidate {
@@ -1668,12 +1647,22 @@ static void updateLiveSpectrumOnce(const Config& cfg, Logger& log) {
     writeLiveSpectrumJson(g_base_dir, merged_spectrum, nf, trigger, log);
 }
 
+static constexpr auto kLiveSpectrumRequestTimeout = std::chrono::seconds(20);
+
+static bool liveSpectrumWanted() {
+    const std::filesystem::path marker = std::filesystem::path(g_base_dir) / "data" / "live_spectrum.request";
+    std::error_code ec;
+    const auto mtime = std::filesystem::last_write_time(marker, ec);
+    if (ec) return false;
+    return std::filesystem::file_time_type::clock::now() - mtime < kLiveSpectrumRequestTimeout;
+}
+
 static void spectrumWorkerThread(const Config& cfg, Logger& log) {
     auto last = std::chrono::steady_clock::now() - std::chrono::seconds(cfg.live_spectrum_interval_sec + 1);
     while (!g_shutdown) {
         auto now = std::chrono::steady_clock::now();
         auto since = std::chrono::duration_cast<std::chrono::seconds>(now - last).count();
-        if (since >= cfg.live_spectrum_interval_sec) {
+        if (since >= cfg.live_spectrum_interval_sec && liveSpectrumWanted()) {
             last = now;
             updateLiveSpectrumOnce(cfg, log);
         }
@@ -1764,6 +1753,7 @@ int main(int argc, char** argv) {
                                   std::ref(channels_mutex), std::ref(uploader), std::ref(udp_sender));
 
         cleanupOldSondeLogs(log);
+        cleanupOldTempFiles(log);
         truncateLogsIfDue(log);
         auto last_log_cleanup = std::chrono::steady_clock::now();
 
@@ -1773,6 +1763,7 @@ int main(int argc, char** argv) {
             if (std::chrono::steady_clock::now() - last_log_cleanup >= kSondeLogCleanupInterval) {
                 last_log_cleanup = std::chrono::steady_clock::now();
                 cleanupOldSondeLogs(log);
+                cleanupOldTempFiles(log);
                 truncateLogsIfDue(log);
             }
 
@@ -1832,6 +1823,7 @@ int main(int argc, char** argv) {
             for (auto& ch : channels) stopChannel(*ch, log);
             channels.clear();
         }
+        uploader.stop();
 
         log.info("wsrx stopped");
         return 0;
