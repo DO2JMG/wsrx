@@ -324,7 +324,7 @@ std::string normalizeCf06Ht03Serial(const std::string& serial) {
         for (unsigned char c : suffix) {
             if (!std::isxdigit(c)) return serial;
         }
-        return "H" + upperCopy(suffix);
+        return "H " + upperCopy(suffix);
     }
     return serial;
 }
