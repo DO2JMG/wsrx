@@ -319,12 +319,12 @@ std::string normalizeCf06Ht03Serial(const std::string& serial) {
         }
         return "CF6" + suffix;
     }
-    if (prefix == "H") {
+    if (prefix == "GTH") {
         if (suffix.size() != 8) return serial;
         for (unsigned char c : suffix) {
             if (!std::isxdigit(c)) return serial;
         }
-        return "H" + upperCopy(suffix);
+        return "GTH" + upperCopy(suffix);
     }
     return serial;
 }
