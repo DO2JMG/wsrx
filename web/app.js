@@ -115,32 +115,6 @@ function resizeCanvas(canvas, minW, minH) {
   return { w, h, dpr };
 }
 
-function percentile(sortedValues, q) {
-  if (!sortedValues.length) return NaN;
-  const pos = (sortedValues.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  if (lo === hi) return sortedValues[lo];
-  const k = pos - lo;
-  return sortedValues[lo] * (1 - k) + sortedValues[hi] * k;
-}
-
-function interpolatePalette(t, stops) {
-  t = Math.max(0, Math.min(1, t));
-  for (let i = 1; i < stops.length; i++) {
-    if (t <= stops[i][0]) {
-      const [p0, c0] = stops[i - 1];
-      const [p1, c1] = stops[i];
-      const k = (t - p0) / (p1 - p0 || 1);
-      const r = Math.round(c0[0] + (c1[0] - c0[0]) * k);
-      const g = Math.round(c0[1] + (c1[1] - c0[1]) * k);
-      const b = Math.round(c0[2] + (c1[2] - c0[2]) * k);
-      return [r, g, b];
-    }
-  }
-  return stops[stops.length - 1][1];
-}
-
 function drawActiveChannelMarkers(ctx, freqs, minF, maxF, padL, padT, plotW, plotH, dpr) {
   if (!Array.isArray(freqs) || !freqs.length) return;
   const yBase = padT + plotH;
@@ -168,8 +142,17 @@ function drawActiveChannelMarkers(ctx, freqs, minF, maxF, padL, padT, plotW, plo
 }
 
 let cachedCallsign = '';
+let cachedStation = null; // receiver position from config.ini [station], null if unknown
 let lastConfigFetch = 0;
 const CONFIG_REFRESH_MS = 5000;
+
+function parseStation(configText) {
+  const lat = parseFloat(iniValue(configText, 'station', 'lat'));
+  const lon = parseFloat(iniValue(configText, 'station', 'lon'));
+  const alt = parseFloat(iniValue(configText, 'station', 'alt'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return null;
+  return { lat, lon, alt: Number.isFinite(alt) ? alt : null };
+}
 
 async function refreshStatus() {
   try {
@@ -183,6 +166,8 @@ async function refreshStatus() {
         const configText = await getText('/api/config');
         const callsign = iniValue(configText, 'station', 'callsign');
         cachedCallsign = callsign || '';
+        cachedStation = parseStation(configText);
+        updateStationMarker(); // follows edits of [station] made in the Config tab
       } catch (e) {
         cachedCallsign = '';
       }
@@ -343,7 +328,7 @@ function drawSpectrum(spec, peaksDoc) {
 
   drawActiveChannelMarkers(ctx, activeChannelFreqs, minF, maxF, padL, padT, plotW, plotH, dpr);
 
-  lastPlotMeta = { points, minF, maxF, minP, maxP, padL, padT, plotW, plotH, dpr };
+  lastPlotMeta = { points, minF, maxF, padL, padT, plotW, plotH, dpr };
 
   ctx.fillStyle = axisTitleColor;
   ctx.font = `${12 * dpr}px system-ui`;
@@ -534,12 +519,56 @@ let sondeIcon = null;
 let predictionIcon = null;
 let launchIcon = null;
 let burstIcon = null;
+let stationIcon = null;
+let stationMarker = null;
+let sondeMapStationCentered = false;
+
+const STATION_COLOR = '#3b99fc';
+const STATION_HALO = 'rgba(59, 153, 252, 0.22)';
+const STATION_HALO_EDGE = 'rgba(59, 153, 252, 0.45)';
+
+// Own position as on common maps: blue dot with a white ring on a pale blue halo.
+// Static on purpose: a pulsing halo would keep the browser busy all the time.
+function stationIconHtml() {
+  const center = 'position:absolute;left:50%;top:50%;border-radius:50%;box-sizing:border-box;';
+  return '<div style="' + center + 'width:36px;height:36px;margin:-18px 0 0 -18px;' +
+      'background:' + STATION_HALO + ';border:1px solid ' + STATION_HALO_EDGE + ';"></div>' +
+    '<div style="' + center + 'width:18px;height:18px;margin:-9px 0 0 -9px;' +
+      'background:' + STATION_COLOR + ';border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.45);"></div>';
+}
+
+function stationTooltipHtml(st) {
+  const name = cachedCallsign ? escapeHtml(cachedCallsign) : 'Receiver';
+  const altText = st.alt !== null ? ' · ' + st.alt.toFixed(0) + ' m' : '';
+  return '<b>' + name + '</b><br>Receiver<br>' + st.lat.toFixed(5) + ', ' + st.lon.toFixed(5) + altText;
+}
+
+function updateStationMarker() {
+  if (!sondeMap || !stationIcon) return;
+  if (!cachedStation) {
+    if (stationMarker) { sondeMap.removeLayer(stationMarker); stationMarker = null; }
+    return;
+  }
+  const latlng = [cachedStation.lat, cachedStation.lon];
+  const html = stationTooltipHtml(cachedStation);
+  if (!stationMarker) {
+    // Below the sonde markers, so a sonde overhead stays clickable.
+    stationMarker = L.marker(latlng, { icon: stationIcon, zIndexOffset: -1000, keyboard: false }).addTo(sondeMap);
+    stationMarker.bindTooltip(html, { direction: 'top', className: 'balloon-label' });
+  } else {
+    stationMarker.setLatLng(latlng);
+    stationMarker.setTooltipContent(html);
+  }
+}
 
 function initSondeMap() {
   if (sondeMap || typeof L === 'undefined') return;
   const container = document.getElementById('sondeMap');
   if (!container) return;
-  sondeMap = L.map('sondeMap').setView([52, 8], 7);
+  sondeMap = cachedStation
+    ? L.map('sondeMap').setView([cachedStation.lat, cachedStation.lon], 9)
+    : L.map('sondeMap').setView([52, 8], 7);
+  sondeMapStationCentered = !!cachedStation;
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -575,6 +604,14 @@ function initSondeMap() {
     popupAnchor: [1, 1],
     className: 'sonde-burst-icon'
   });
+  stationIcon = L.divIcon({
+    className: 'station-dot', // replaces Leaflet's default white 'leaflet-div-icon' box
+    html: stationIconHtml(),
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    tooltipAnchor: [0, -10]
+  });
+  updateStationMarker();
 
   initMapLiveFilterButton();
   initMapFullscreenButton();
@@ -922,8 +959,14 @@ async function refreshSondeMap() {
   }
 
   if (!sondeMapBoundsFitted && allPoints.length) {
-    sondeMap.fitBounds(allPoints, { padding: [30, 30], maxZoom: 12 });
+    // Keep the own position in view, so the tracks are seen relative to the receiver.
+    const fitPoints = cachedStation ? allPoints.concat([[cachedStation.lat, cachedStation.lon]]) : allPoints;
+    sondeMap.fitBounds(fitPoints, { padding: [30, 30], maxZoom: 12 });
     sondeMapBoundsFitted = true;
+  } else if (!sondeMapBoundsFitted && cachedStation && !sondeMapStationCentered) {
+    // Nothing to show yet: start at the receiver (only once, so panning is not undone).
+    sondeMap.setView([cachedStation.lat, cachedStation.lon], 9);
+    sondeMapStationCentered = true;
   }
 
   updateMapAzElBox();
@@ -943,9 +986,50 @@ async function refreshSondeMap() {
 
 let lastRadiosondesRefresh = 0;
 
-async function refreshAll() {
+// Polling: one refresh at a time, REFRESH_MS after the previous one finished, and
+// none while the page is hidden. The old setInterval(refreshAll, 500) sent ~10
+// requests per second and kept wsrx's live spectrum (KA9Q 'powers') running even
+// for a background tab; overlapping runs piled up when the receiver was busy.
+const REFRESH_MS = 1000;
+const CPU_REFRESH_MS = 3000; // wsrx-web rewrites cpu_load.json every 3 s
+let lastCpuRefresh = 0;
+let refreshRunning = null;
+let refreshAgain = false;
+
+function refreshAll() {
+  if (refreshRunning) {
+    refreshAgain = true; // e.g. tab switch during a refresh: run once more afterwards
+    return refreshRunning;
+  }
+  refreshRunning = (async () => {
+    try {
+      do {
+        refreshAgain = false;
+        try { await refreshAllOnce(); } catch (e) { /* e.g. receiver unreachable: next round */ }
+      } while (refreshAgain);
+    } finally {
+      refreshRunning = null;
+    }
+  })();
+  return refreshRunning;
+}
+
+async function refreshLoop() {
+  if (!document.hidden) await refreshAll();
+  setTimeout(refreshLoop, REFRESH_MS);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshAll();
+});
+
+async function refreshAllOnce() {
   await refreshStatus();
-  await refreshCpu();
+  const nowCpu = Date.now();
+  if (nowCpu - lastCpuRefresh >= CPU_REFRESH_MS) {
+    lastCpuRefresh = nowCpu;
+    await refreshCpu();
+  }
   await refreshSpectrum();
   if (activeTab === 'log') setLogText(await getText('/api/log?lines=300'));
 
@@ -1418,13 +1502,11 @@ const SONDE_DETAIL_ROWS = [
        d.humidity != null ? Number(d.humidity).toFixed(1) + ' %' : null,
        d.pressure != null ? Number(d.pressure).toFixed(2) + ' hPa' : null], ', ') },
   { label: 'Battery', render: d => d.batt != null ? Number(d.batt).toFixed(2) + ' V' : null },
-  { label: 'RSSI', render: d => d.rssi != null ? Number(d.rssi).toFixed(1) + ' dBm' : null },
   { label: 'TX power (raw code)', render: d => d.tx_power_raw != null ? String(d.tx_power_raw) : null },
   { label: 'Burst-kill timer', render: d => {
       const v = d.burstkilltimer != null ? d.burstkilltimer : d.bt;
       return v != null ? v + ' s' : null;
     } },
-  { label: 'Kill timer', render: d => d.killtimer != null ? d.killtimer + ' s' : null },
   { label: 'Mainboard / Firmware', render: d => {
       if (!d.type || String(d.type).toUpperCase().indexOf('RS41') === -1) return null;
       return joinParts(
@@ -1442,8 +1524,8 @@ const SONDE_DETAIL_ROWS = [
 const SONDE_DETAIL_CONSUMED_KEYS = new Set([
   'serial', 'type', 'wsrx_frequency', 'encrypted', 'frame', 'datetime', 'ref_datetime', 'ref_position',
   'first_time', 'modified', 'frames', 'distance_km', 'bearing_deg', 'elevation_deg', 'lat', 'lon', 'first_altitude', 'alt', 'altitude',
-  'vel_h', 'heading', 'vel_v', 'sats', 'sat', 'temp', 'humidity', 'pressure', 'batt', 'rssi',
-  'burstkilltimer', 'bt', 'killtimer', 'aux', 'rs41_mainboard', 'rs41_mainboard_fw', 'tx_power_raw',
+  'vel_h', 'heading', 'vel_v', 'sats', 'sat', 'temp', 'humidity', 'pressure', 'batt',
+  'burstkilltimer', 'bt', 'aux', 'rs41_mainboard', 'rs41_mainboard_fw', 'tx_power_raw',
   'o3_instrument_number', 'o3_pump_temperature_c', 'o3_current_ua', 'o3_battery_v', 'o3_pump_current_ma', 'o3_external_v',
 ]);
 
@@ -1555,7 +1637,7 @@ function initSpectrumTooltip() {
       tooltip.style.display = 'none';
       return;
     }
-    const { points, minF, maxF, minP, maxP, padL, padT, plotW, plotH, dpr } = lastPlotMeta;
+    const { points, minF, maxF, padL, padT, plotW, plotH, dpr } = lastPlotMeta;
     const padLCss = padL / dpr, padTCss = padT / dpr, plotWCss = plotW / dpr, plotHCss = plotH / dpr;
 
     if (mx < padLCss || mx > padLCss + plotWCss || my < padTCss || my > padTCss + plotHCss) {
@@ -1617,5 +1699,4 @@ async function loadVersion() {
 
 initSpectrumTooltip();
 loadVersion();
-setInterval(refreshAll, 500);
-refreshAll();
+refreshLoop(); // also does the first refresh right away

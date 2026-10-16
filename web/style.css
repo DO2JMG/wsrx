@@ -128,11 +128,6 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.path-balloon {
-  display: block;
-  flex-shrink: 0;
-  opacity: .85;
-}
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -282,7 +277,6 @@ button.theme-toggle {
 }
 .panel-title-row h2 { margin: 0; }
 .panel-title-row .panel-subtitle { margin: 0; }
-.caret { color: var(--text); margin-right: 6px; }
 .spectrum-canvas-wrap {
   position: relative;
 }
@@ -307,17 +301,6 @@ button.theme-toggle {
   transform: translate(-50%, -100%);
   z-index: 10;
 }
-
-.stats-list { margin-bottom: 4px; }
-.stat-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--bg);
-}
-.stat-line span { color: var(--text); }
-.stat-line strong { color: var(--text); font-weight: 600; }
 
 .tabs {
   display: flex;
