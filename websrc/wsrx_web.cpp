@@ -340,7 +340,7 @@ static void cached_script_status(const App &app, std::string &raw, int &rc) {
         g_status_rc = code;
         g_status_refreshed = now;
         g_status_valid = true;
-        g_status_key = status_state_key(app);  // the script may have removed a stale pid file
+        g_status_key = status_state_key(app);
     }
     raw = g_status_raw;
     rc = g_status_rc;
@@ -416,13 +416,13 @@ static std::string base64_decode(const std::string &in) {
 static std::string get_header(const std::string &request, const std::string &header_name) {
     std::istringstream in(request);
     std::string line;
-    std::getline(in, line); // request line, not a header
+    std::getline(in, line);
     std::string lower_name = header_name;
     std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
                     [](unsigned char c) { return std::tolower(c); });
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty()) break; // end of headers
+        if (line.empty()) break;
         size_t colon = line.find(':');
         if (colon == std::string::npos) continue;
         std::string name = line.substr(0, colon);
@@ -438,7 +438,7 @@ static std::string get_header(const std::string &request, const std::string &hea
 }
 
 static bool check_auth(const App &app, const std::string &request) {
-    if (app.web_auth_user.empty()) return true; // auth disabled: no user configured
+    if (app.web_auth_user.empty()) return true;
     std::string auth_header = get_header(request, "Authorization");
     const std::string prefix = "Basic ";
     if (auth_header.compare(0, prefix.size(), prefix) != 0) return false;
@@ -628,7 +628,6 @@ static std::optional<std::string> extract_json_string(const std::string &line, c
         size_t up = p;
         if (auto cp = read_unicode_escape(line, up)) {
             unsigned int codepoint = *cp;
-            // Combine a UTF-16 surrogate pair into a single code point.
             if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
                 size_t np = up + 1;
                 if (auto low = read_unicode_escape(line, np); low && *low >= 0xDC00 && *low <= 0xDFFF) {
@@ -648,7 +647,7 @@ static std::optional<std::string> extract_json_string(const std::string &line, c
             case 'r': out.push_back('\r'); break;
             case 'b': out.push_back('\b'); break;
             case 'f': out.push_back('\f'); break;
-            default: out.push_back(next); break; // handles \" \\ \/ etc.
+            default: out.push_back(next); break;
         }
         ++p;
     }
@@ -661,7 +660,7 @@ static std::string strip_json_ext(const std::string &name) {
 }
 
 static double haversine_km(double lat1, double lon1, double lat2, double lon2) {
-    constexpr double R = 6371.0088; // mean Earth radius, km
+    constexpr double R = 6371.0088;
     constexpr double kPi = 3.14159265358979323846;
     const double dlat = (lat2 - lat1) * kPi / 180.0;
     const double dlon = (lon2 - lon1) * kPi / 180.0;
@@ -672,8 +671,6 @@ static double haversine_km(double lat1, double lon1, double lat2, double lon2) {
     return R * c;
 }
 
-// Initial great-circle bearing from (lat1,lon1) to (lat2,lon2), in degrees,
-// normalized to [0, 360). 0 = north, 90 = east, etc.
 static double bearing_deg(double lat1, double lon1, double lat2, double lon2) {
     constexpr double kPi = 3.14159265358979323846;
     const double phi1 = lat1 * kPi / 180.0;
@@ -688,7 +685,7 @@ static double bearing_deg(double lat1, double lon1, double lat2, double lon2) {
 
 static double elevation_deg(double lat1, double lon1, double alt1, double lat2, double lon2, double alt2) {
     constexpr double kPi = 3.14159265358979323846;
-    constexpr double kEarthRadius = 6371000.0; // meters
+    constexpr double kEarthRadius = 6371000.0;
     const double phi1 = lat1 * kPi / 180.0;
     const double phi2 = lat2 * kPi / 180.0;
     const double dlon = (lon2 - lon1) * kPi / 180.0;
@@ -714,7 +711,7 @@ static std::string sanitize_serial(const std::string &s) {
 }
 
 static std::mutex g_launchsite_mutex;
-static std::map<std::string, std::string> g_launchsite_cache; // serial -> launchsite name ("" = looked up, none found)
+static std::map<std::string, std::string> g_launchsite_cache;
 static std::set<std::string> g_launchsite_pending;
 
 static void fetchLaunchsiteBackground(std::string serial) {
@@ -774,11 +771,11 @@ static std::optional<std::string> json_parse_string_at(const std::string &s, siz
             case 'b': out.push_back('\b'); break;
             case 'f': out.push_back('\f'); break;
             case '/': out.push_back('/'); break;
-            default: out.push_back(next); break; // handles \" \\ etc.
+            default: out.push_back(next); break;
         }
         ++p;
     }
-    return std::nullopt; // unterminated string
+    return std::nullopt;
 }
 
 struct JsonValue {
@@ -867,7 +864,7 @@ private:
     }
 
     std::optional<JsonValue> parseArray() {
-        ++p_; // consume '['
+        ++p_;
         JsonValue v;
         v.type = JsonValue::Type::Array;
         skipWs();
@@ -885,7 +882,7 @@ private:
     }
 
     std::optional<JsonValue> parseObject() {
-        ++p_; // consume '{'
+        ++p_;
         JsonValue v;
         v.type = JsonValue::Type::Object;
         skipWs();
@@ -978,7 +975,7 @@ struct CachedSondeLog {
 };
 
 static std::mutex g_sonde_cache_mutex;
-static std::map<std::string, CachedSondeLog> g_sonde_cache;  // key: file path
+static std::map<std::string, CachedSondeLog> g_sonde_cache;
 
 static bool looksLikeSondeSubtypeName(const std::string& s) {
     if (s.empty()) return false;
@@ -1041,7 +1038,6 @@ static void sonde_summary_add_line(SondeLogSummary &s, const std::string &line) 
     if (s.tail.size() > kTailFrames) s.tail.pop_front();
 }
 
-// Brings the cached summary of one sonde log up to date. Caller holds g_sonde_cache_mutex.
 static const SondeLogSummary *sonde_cache_refresh_locked(const std::string &path) {
     struct stat st{};
     if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -1103,7 +1099,7 @@ static void update_prediction_for_sonde(const App &app, const std::string &seria
     if (frames.empty()) return;
     const SondeFrame &last = frames.back();
     if (!std::isfinite(last.lat) || !std::isfinite(last.lon) || !std::isfinite(last.alt) || !std::isfinite(last.v_speed)) return;
-    if (last.alt >= 25000.0) return; // matches realtime.php's $predictionMaxAltitude
+    if (last.alt >= 25000.0) return;
     if (!sonde_is_descending(frames)) return;
 
     double longitude = last.lon < 0 ? last.lon + 360.0 : last.lon;
@@ -1145,7 +1141,7 @@ static void update_prediction_for_sonde(const App &app, const std::string &seria
 }
 
 struct PredictionOutput {
-    std::vector<std::array<double, 3>> track; // lat, lon, alt (all stages, ascent+descent)
+    std::vector<std::array<double, 3>> track;
     bool has_landing = false;
     double landing_lat = std::numeric_limits<double>::quiet_NaN();
     double landing_lon = std::numeric_limits<double>::quiet_NaN();
@@ -1331,7 +1327,6 @@ static void prediction_scheduler_thread(App app) {
             bool have_cache = stat(cache_path.c_str(), &cache_st) == 0;
             if (have_cache && (now - cache_st.st_mtime) < PREDICT_MIN_INTERVAL_SEC) continue;
 
-            // Only the newest frames are needed; the cache reads just what was appended.
             update_prediction_for_sonde(app, serial, sonde_tail_frames(path.string()));
         }
     }
@@ -1354,7 +1349,6 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
 
     const std::time_t now = std::time(nullptr);
 
-    // Held while the answer is built: the items point into the cache.
     std::lock_guard<std::mutex> cache_lock(g_sonde_cache_mutex);
     std::set<std::string> present;
 
@@ -1368,7 +1362,7 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
 
         Item item;
         item.serial = strip_json_ext(path.filename().string());
-        if (serial_is_undecoded(item.serial)) continue; // e.g. DFM's "Dxxxxxx" placeholder, real serial not decoded yet
+        if (serial_is_undecoded(item.serial)) continue;
         item.size = entry.file_size(fec);
 
         std::error_code mtime_ec;
@@ -1385,7 +1379,6 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
         if (item.s != nullptr && item.s->frames > 0) items.push_back(std::move(item));
     }
 
-    // Forget logs that were deleted in the meantime.
     for (auto it = g_sonde_cache.begin(); it != g_sonde_cache.end();) {
         if (present.count(it->first) != 0) ++it;
         else it = g_sonde_cache.erase(it);
@@ -1492,7 +1485,7 @@ static std::optional<OzoneXdata> decodeOzoneXdata(const std::string &aux_raw) {
 
     OzoneXdata d;
     d.instrument_type = static_cast<int>(hexAt(0, 2));
-    if (d.instrument_type != 5) return std::nullopt; // only instrument type 5 (OIF411/ozone) is decoded
+    if (d.instrument_type != 5) return std::nullopt;
 
     d.instrument_number = static_cast<int>(hexAt(2, 2));
     d.pump_temperature_c = hexAt(4, 4) / 100.0;
@@ -1521,7 +1514,7 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
     };
     static const std::vector<std::string> number_keys = {
         "frame", "lat", "lon", "alt", "altitude", "vel_h", "heading", "vel_v", "sats", "sat",
-        "bt", "batt", "temp", "humidity", "pressure", "rssi", "burstkilltimer", "killtimer",
+        "bt", "batt", "temp", "humidity", "pressure", "burstkilltimer",
         "wsrx_frequency", "rs41_mainboard_fw", "tx_power_raw"
     };
     bool encrypted = false;
@@ -1590,7 +1583,7 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
     if (saw_encrypted) js << ",\"encrypted\":" << (encrypted ? "true" : "false");
 
     for (const auto &k : string_keys) {
-        if (k == "type" || k == "subtype" || k == "id" || k == "serial") continue; // already surfaced above
+        if (k == "type" || k == "subtype" || k == "id" || k == "serial") continue;
         auto it = str_fields.find(k);
         js << ",\"" << k << "\":";
         if (it != str_fields.end()) js << "\"" << json_escape(it->second) << "\""; else js << "null";
@@ -1671,7 +1664,7 @@ static bool read_full_request(int fd, std::string &out) {
     size_t body_start = header_end + 4;
     while (out.size() - body_start < static_cast<size_t>(content_length)) {
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) break; // client hung up early; handle whatever we got
+        if (n <= 0) break;
         out.append(buf, static_cast<size_t>(n));
         if (out.size() > kMaxRequestBytes) return false;
     }
