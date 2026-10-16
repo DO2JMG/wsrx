@@ -227,19 +227,10 @@ double calculateElevation(
     return elevation_rad / kDegToRad;
 }
 
-}  // namespace
+}
 
 
 namespace AprsFormat {
-
-std::string formatLatitude(double lat) {
-    return formatLatMinutes(lat);
-}
-
-std::string formatLongitude(double lon) {
-    return formatLonMinutes(lon);
-}
-
 
 std::string buildObjectReport(
     const AprsConfig& cfg,
@@ -563,4 +554,4 @@ std::string buildStationBeacon(
     return line.str();
 }
 
-}  // namespace AprsFormat
+}

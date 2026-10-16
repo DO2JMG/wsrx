@@ -75,7 +75,7 @@ bool parseTnc2(const std::string& line, std::string& source, std::string& dest, 
     return !source.empty() && !dest.empty();
 }
 
-}  // namespace
+}
 
 namespace Ax25 {
 
@@ -90,15 +90,15 @@ std::vector<uint8_t> encodeAxUdpFrame(const std::string& tnc2_line) {
     const bool no_digis = path.empty();
 
     uint8_t addr[7];
-    encodeAddress(dest, no_digis, /*c_bit=*/true, addr);
+    encodeAddress(dest, no_digis,  true, addr);
     frame.insert(frame.end(), addr, addr + 7);
 
-    encodeAddress(source, no_digis, /*c_bit=*/false, addr);
+    encodeAddress(source, no_digis,  false, addr);
     frame.insert(frame.end(), addr, addr + 7);
 
     for (size_t i = 0; i < path.size(); ++i) {
         bool last = (i + 1 == path.size());
-        encodeAddress(path[i], last, /*c_bit=*/false, addr);
+        encodeAddress(path[i], last,  false, addr);
         frame.insert(frame.end(), addr, addr + 7);
     }
 
@@ -114,4 +114,4 @@ std::vector<uint8_t> encodeAxUdpFrame(const std::string& tnc2_line) {
     return frame;
 }
 
-}  // namespace Ax25
+}

@@ -88,7 +88,7 @@ void stationBeaconLoop(const AprsConfig& cfg, AprsIsClient& aprs, UdpForwarder& 
     }
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
     std::string config_file = "aprs.ini";

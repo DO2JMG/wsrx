@@ -35,7 +35,6 @@ IniMap parseIni(const std::string& path) {
         if (eq == std::string::npos) continue;
         std::string key = trim(t.substr(0, eq));
         std::string value = trim(t.substr(eq + 1));
-        // Strip inline comments starting with ' ;' or ' #'
         size_t c = value.find(" ;");
         if (c != std::string::npos) value = trim(value.substr(0, c));
         c = value.find(" #");
@@ -72,7 +71,7 @@ bool iniBool(const IniMap& ini, const std::string& key, bool fallback) {
     return v == "1" || v == "true" || v == "yes" || v == "on";
 }
 
-}  // namespace
+}
 
 AprsConfig AprsConfig::load(const std::string& config_file) {
     AprsConfig cfg;

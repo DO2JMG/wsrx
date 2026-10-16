@@ -55,7 +55,7 @@ bool parseNumber(const std::string& s, size_t& i, double& out) {
     return true;
 }
 
-}  // namespace
+}
 
 bool JsonObject::parse(const std::string& text, JsonObject& out) {
     out.values_.clear();
@@ -65,7 +65,7 @@ bool JsonObject::parse(const std::string& text, JsonObject& out) {
     ++i;
     skipWs(text, i);
 
-    if (i < text.size() && text[i] == '}') return true;  // empty object
+    if (i < text.size() && text[i] == '}') return true;
 
     while (true) {
         skipWs(text, i);

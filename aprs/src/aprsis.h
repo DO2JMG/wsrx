@@ -19,7 +19,6 @@ public:
     void start();
     void stop();
     bool sendLine(const std::string& line);
-    bool isConnected() const { return connected_.load(); }
 
 private:
     void connectionLoop();

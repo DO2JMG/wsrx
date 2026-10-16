@@ -71,7 +71,7 @@ bool UdpForwarder::send(const std::string& line) {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (sock_ < 0) return false;  // start() failed or was never enabled successfully
+    if (sock_ < 0) return false;
 
     ssize_t sent = ::sendto(sock_, frame.data(), frame.size(), 0, reinterpret_cast<sockaddr*>(&addr_), addr_len_);
     if (sent < 0 || static_cast<size_t>(sent) != frame.size()) {

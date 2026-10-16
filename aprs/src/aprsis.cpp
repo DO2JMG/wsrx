@@ -140,7 +140,7 @@ void AprsIsClient::connectionLoop() {
     while (!shutdown_.load()) {
         if (!connected_.load()) {
             if (connectOnce()) {
-                backoff_sec = cfg_.reconnect_min_sec > 0 ? cfg_.reconnect_min_sec : 5;  // reset on success
+                backoff_sec = cfg_.reconnect_min_sec > 0 ? cfg_.reconnect_min_sec : 5;
             } else {
                 for (int waited = 0; waited < backoff_sec && !shutdown_.load(); ++waited) {
                     std::this_thread::sleep_for(std::chrono::seconds(1));
