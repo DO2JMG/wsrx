@@ -18,4 +18,4 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
                                 const std::string& app_version,
                                 const StationLocation* station = nullptr);
 
-}  // namespace TelemetryJson
+}

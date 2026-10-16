@@ -3,6 +3,7 @@
 #include "decoderprocess.h"
 #include "logger.h"
 #include "rs92ephemeris.h"
+#include "scanbackoff.h"
 #include "telemetryparser.h"
 #include "uploader.h"
 #include "udpout.h"
@@ -21,7 +22,6 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <numeric>
 #include <optional>
 #include <mutex>
 #include <regex>
@@ -38,6 +38,7 @@ static std::atomic<bool> g_shutdown{false};
 static std::string g_base_dir = ".";
 static std::mutex g_powers_mutex;
 static std::atomic<unsigned int> g_scan_ssrc_sequence{0};
+static ScanBackoff g_scan_backoff;
 
 static bool startsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -147,11 +148,9 @@ static void cleanupOldTempFiles(Logger& log) {
         const auto& entry = *it;
         if (!isWsrxTempFile(entry.path().filename().string())) continue;
         std::error_code fec;
-        // symlink_status(): only real files, never follow a link someone placed in /tmp.
         if (!std::filesystem::is_regular_file(entry.symlink_status(fec)) || fec) continue;
         const auto mtime = std::filesystem::last_write_time(entry.path(), fec);
         if (fec || now - mtime <= kTempFileMaxAge) continue;
-        // Files of other users can't be removed (sticky /tmp); skip them without a warning.
         if (std::filesystem::remove(entry.path(), fec) && !fec) ++removed;
     }
     if (removed > 0) {
@@ -169,7 +168,7 @@ static void truncateLogsIfDue(Logger& log) {
 
     const auto now = std::filesystem::file_time_type::clock::now();
     if (!std::filesystem::exists(marker, ec)) {
-        std::ofstream(marker, std::ios::trunc);  // start the 12h timer now
+        std::ofstream(marker, std::ios::trunc);
         return;
     }
     const auto last = std::filesystem::last_write_time(marker, ec);
@@ -276,16 +275,10 @@ static std::string expandDecoderArgs(std::string args, const Config& cfg) {
     return args;
 }
 
-static int effectiveDecoderSampleRate(const Config& cfg, const std::string& decoder) {
-    (void)decoder;
-    return cfg.sample_rate;
-}
-
 static std::string makeTempKa9qScript(const Config& cfg, const std::string& decoder_cmd, const std::string& decoder_label, const std::string& decoder_args) {
     long long hz = freqHz(cfg.frequency_mhz);
     std::string ssrc = ka9qSsrc(cfg.frequency_mhz, 1);
 
-    // Deleted by cleanupOldTempFiles() once it is older than kTempFileMaxAge.
     char tmpl[] = "/tmp/wsrx-ka9q-XXXXXX.sh";
     int fd = mkstemps(tmpl, 3);
     if (fd < 0) {
@@ -319,14 +312,8 @@ static std::string makeTempKa9qScript(const Config& cfg, const std::string& deco
     return tmpl;
 }
 
-static std::string buildKa9qDecoderPipeline(const Config& cfg, const std::string& decoder_cmd, const std::string& decoder_label, const std::string& decoder_args, Logger& log) {
-    (void)log;
+static std::string buildKa9qDecoderPipeline(const Config& cfg, const std::string& decoder_cmd, const std::string& decoder_label, const std::string& decoder_args) {
     std::string script = makeTempKa9qScript(cfg, decoder_cmd, decoder_label, decoder_args);
-    std::ostringstream info;
-    info << decoder_label << " KA9Q mode: pcmrecord raw IQ -> " << decoder_label
-         << " JSON args=[" << decoder_args << "]"
-         << " sample_rate=" << cfg.sample_rate
-         << " channel=[" << cfg.ka9q_low_hz << "," << cfg.ka9q_high_hz << "]";
     return "/bin/sh " + shellQuote(script);
 }
 
@@ -484,7 +471,7 @@ static std::string decoderArgsFor(const Config& cfg, const std::string& decoder)
     throw std::runtime_error("Unsupported decoder: " + decoder);
 }
 
-static std::string buildDecoderCommand(const Config& cfg, Logger& log) {
+static std::string buildDecoderCommand(const Config& cfg) {
     const std::string decoder_name = normalizeDecoderName(cfg.decoder);
     const std::string label = decoderLabel(decoder_name);
     const std::string cmd_path = decoderCommandPath(cfg, decoder_name);
@@ -492,15 +479,9 @@ static std::string buildDecoderCommand(const Config& cfg, Logger& log) {
     if (!fileExists(cmd_path)) {
         throw std::runtime_error(label + " decoder not found: " + cmd_path + " (expected in decoder/ next to wsrx)");
     }
-    if (!cfg.wav_file.empty()) {
-        const std::string args = decoderArgsFor(cfg, decoder_name);
-        std::string prefix;
-        if (std::system("command -v stdbuf >/dev/null 2>&1") == 0) prefix = "stdbuf -oL ";
-        return prefix + shellQuote(cmd_path) + " " + args + " " + shellQuote(cfg.wav_file);
-    }
 
     const std::string args = decoderArgsFor(cfg, decoder_name);
-    return buildKa9qDecoderPipeline(cfg, cmd_path, label, args, log);
+    return buildKa9qDecoderPipeline(cfg, cmd_path, label, args);
 }
 
 struct ScanDetection {
@@ -905,14 +886,28 @@ static void writeScanPeaksJson(const std::string& base_dir,
 struct ScanCandidate {
     double frequency_hz = 0.0;
     const RadioBackend* radio = nullptr;
+    double snr_db = NAN;
 };
+
+static double maxPowerNearHz(const std::vector<SpectrumBin>& spectrum, double frequency_hz, double window_hz) {
+    double best = NAN;
+    for (const auto& b : spectrum) {
+        if (std::fabs(b.frequency_hz - frequency_hz) > window_hz) continue;
+        if (!std::isfinite(best) || b.power_db > best) best = b.power_db;
+    }
+    return best;
+}
+
+static double scanMatchWidthHz(const Config& cfg) {
+    return std::max(cfg.scan_active_skip_width_khz * 1000.0, static_cast<double>(cfg.scan_min_distance_hz));
+}
 
 struct BackendScanResult {
     std::vector<SpectrumBin> spectrum;
     double noise_floor = NAN;
     double trigger = NAN;
-    std::vector<size_t> peak_idx;       // strongest peaks (shown in the web interface)
-    std::vector<size_t> candidate_idx;  // strongest peaks that are not decoded yet
+    std::vector<size_t> peak_idx;
+    std::vector<size_t> candidate_idx;
     bool used_fallback = false;
 };
 
@@ -1082,7 +1077,7 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
 
     const double q = static_cast<double>(cfg.scan_quantization_hz);
     std::vector<double> quantized_hz;
-    auto appendUnique = [&](double hz, const RadioBackend* radio) {
+    auto appendUnique = [&](double hz, const RadioBackend* radio, double snr_db) {
         if (!std::isfinite(hz) || hz <= 0.0) return;
         if (isBlacklistedFrequencyHz(cfg, hz)) return;
         const double qhz = std::round(hz / q) * q;
@@ -1090,8 +1085,10 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
             if (std::fabs(old_qhz - qhz) < q / 2.0) return;
         }
         quantized_hz.push_back(qhz);
-        candidates.push_back({hz, radio});
+        candidates.push_back({hz, radio, snr_db});
     };
+
+    std::vector<double> whitelist_snr_db(cfg.scan_whitelist_mhz.size(), NAN);
 
     for (const auto& radio : cfg.radios) {
         BackendScanResult res = runKa9qPowerScanForRadio(cfg, radio, log, allow_fallback_candidates, active_mhz);
@@ -1104,7 +1101,15 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         if (std::isfinite(res.trigger) && (!std::isfinite(merged_trigger) || res.trigger < merged_trigger)) merged_trigger = res.trigger;
         any_fallback = any_fallback || res.used_fallback;
 
-        for (size_t idx : res.candidate_idx) appendUnique(res.spectrum[idx].frequency_hz, &radio);
+        for (size_t idx : res.candidate_idx) {
+            appendUnique(res.spectrum[idx].frequency_hz, &radio, res.spectrum[idx].power_db - res.noise_floor);
+        }
+
+        for (size_t i = 0; i < cfg.scan_whitelist_mhz.size(); ++i) {
+            const double mhz = cfg.scan_whitelist_mhz[i];
+            if (!(mhz >= radio.scan_min_mhz && mhz <= radio.scan_max_mhz)) continue;
+            whitelist_snr_db[i] = maxPowerNearHz(res.spectrum, mhz * 1e6, scanMatchWidthHz(cfg)) - res.noise_floor;
+        }
     }
 
     if (!merged_spectrum.empty()) {
@@ -1112,7 +1117,8 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         writeScanPeaksJson(g_base_dir, merged_spectrum, merged_nf, merged_trigger, merged_peak_idx, any_fallback, log);
     }
 
-    for (double mhz : cfg.scan_whitelist_mhz) {
+    for (size_t wi = 0; wi < cfg.scan_whitelist_mhz.size(); ++wi) {
+        const double mhz = cfg.scan_whitelist_mhz[wi];
         if (!std::isfinite(mhz) || mhz <= 0.0) continue;
         if (isBlacklistedFrequencyMhz(cfg, mhz)) continue;
         const RadioBackend* owner = nullptr;
@@ -1128,7 +1134,7 @@ static std::vector<ScanCandidate> runKa9qPowerScan(const Config& cfg, Logger& lo
         if (cfg.verbose || cfg.decoder_debug) {
             log.debug("scan whitelist_mhz: forcing candidate " + std::to_string(mhz) + " MHz on [" + owner->name + "]");
         }
-        appendUnique(mhz * 1e6, owner);
+        appendUnique(mhz * 1e6, owner, whitelist_snr_db[wi]);
     }
 
     if (candidates.empty()) log.info("scan spectrum: no usable candidates");
@@ -1164,7 +1170,8 @@ static std::string buildScanTypesList(const Config& cfg, Logger& log) {
     return out;
 }
 
-static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log) {
+static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double frequency_mhz, Logger& log,
+                                                           bool* checked = nullptr) {
     cfg.frequency_mhz = frequency_mhz;
 
     const int suffix = 20 + static_cast<int>(g_scan_ssrc_sequence.fetch_add(1, std::memory_order_relaxed) % 70u);
@@ -1221,6 +1228,7 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     }
     int rc = pclose(fp);
     closeKa9qSsrc(cfg, ssrc, log);
+    if (checked != nullptr && !g_shutdown) *checked = true;
 
     if (cfg.decoder_debug && !output.empty()) {
         std::string one = output;
@@ -1247,13 +1255,14 @@ static std::optional<ScanDetection> runSingleScanDetection(Config cfg, double fr
     return det;
 }
 
-static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& cfg, double frequency_mhz, Logger& log) {
-    auto det = runSingleScanDetection(cfg, frequency_mhz, log);
+static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& cfg, double frequency_mhz, Logger& log,
+                                                                  bool* checked = nullptr) {
+    auto det = runSingleScanDetection(cfg, frequency_mhz, log, checked);
     if (!det) return std::nullopt;
 
     double current_mhz = frequency_mhz;
     for (int iter = 0; iter < 2 && !g_shutdown; ++iter) {
-        if (std::fabs(det->frequency_mhz - current_mhz) < 0.0005) break; // < 500 Hz: converged
+        if (std::fabs(det->frequency_mhz - current_mhz) < 0.0005) break;
         current_mhz = det->frequency_mhz;
         auto refined = runSingleScanDetection(cfg, current_mhz, log);
         if (!refined) break;
@@ -1261,7 +1270,7 @@ static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& 
             std::ostringstream msg;
             msg << "scan refine " << refined->sonde_type << " re-centered at " << current_mhz
                 << " MHz -> " << refined->frequency_mhz << " MHz score=" << refined->score;
-            log.debug(msg.str());
+            //log.debug(msg.str());
         }
         det = refined;
     }
@@ -1287,7 +1296,8 @@ static std::vector<double> buildOffsetTrialsHz(const Config& cfg) {
     return offsets;
 }
 
-static std::optional<ScanDetection> runScanDetection(const Config& cfg, double peak_mhz, Logger& log) {
+static std::optional<ScanDetection> runScanDetection(const Config& cfg, double peak_mhz, Logger& log,
+                                                     bool* checked = nullptr) {
     auto offsets = buildOffsetTrialsHz(cfg);
     std::optional<ScanDetection> best;
     double best_score = -1.0;
@@ -1306,7 +1316,7 @@ static std::optional<ScanDetection> runScanDetection(const Config& cfg, double p
     for (double off_hz : offsets) {
         if (g_shutdown) break;
         const double trial_mhz = peak_mhz + off_hz / 1000000.0;
-        auto det = runSingleScanDetectionRefined(cfg, trial_mhz, log);
+        auto det = runSingleScanDetectionRefined(cfg, trial_mhz, log, checked);
         if (!det) continue;
 
         double score = std::isnan(det->score) ? 0.0 : std::fabs(det->score);
@@ -1344,6 +1354,7 @@ struct Channel {
     DecoderProcess decoder;
     TelemetryParser parser;
     bool got_frame = false;
+    double scan_snr_db = NAN;
     std::chrono::steady_clock::time_point started;
     std::chrono::steady_clock::time_point last_frame;
     std::atomic<bool> stop_requested{false};
@@ -1371,7 +1382,7 @@ static void writeChannelsJson(const std::vector<std::unique_ptr<Channel>>& chann
     js << "{\"pid\":" << ::getpid() << ",\"updated\":" << static_cast<long long>(std::time(nullptr)) << ",\"channels\":[";
     for (size_t i = 0; i < channels.size(); ++i) {
         std::ostringstream freq;
-        freq << channels[i]->cfg.frequency_mhz;  // same format as in the log lines
+        freq << channels[i]->cfg.frequency_mhz;
         if (i) js << ",";
         js << "{\"frequency\":\"" << freq.str() << "\",\"decoder\":\"" << decoderLabel(channels[i]->cfg.decoder) << "\"}";
     }
@@ -1390,8 +1401,6 @@ static void writeChannelsJson(const std::vector<std::unique_ptr<Channel>>& chann
 }
 
 static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
-    cfg.sample_rate = effectiveDecoderSampleRate(cfg, cfg.decoder);
-
     if (normalizeDecoderName(cfg.decoder) == "rs92") {
         const std::string ephemeris_path = Rs92Ephemeris::ensure(cfg, log);
         if (ephemeris_path.empty()) {
@@ -1406,7 +1415,7 @@ static std::unique_ptr<Channel> startChannelProcess(Config cfg, Logger& log) {
     ch->started = std::chrono::steady_clock::now();
     ch->last_frame = ch->started;
 
-    std::string command = buildDecoderCommand(ch->cfg, log);
+    std::string command = buildDecoderCommand(ch->cfg);
     std::ostringstream msg;
     msg << "starting decoder channel " << ch->cfg.frequency_mhz << " MHz: ";
     log.info(msg.str());
@@ -1432,14 +1441,17 @@ static void channelReaderThread(Channel* ch, const Config& base_cfg, Logger& log
             prefix << "decoder " << ch->cfg.frequency_mhz << ": " << *line;
             log.debug(prefix.str());
         }
-        auto frame = ch->parser.parseLine(*line, ch->cfg.frequency_mhz, base_cfg.callsign);
+        auto frame = ch->parser.parseLine(*line, ch->cfg.frequency_mhz);
         if (!frame) continue;
 
+        bool first_frame = false;
         {
             std::lock_guard<std::mutex> lock(ch->state_mutex);
+            first_frame = !ch->got_frame;
             ch->got_frame = true;
             ch->last_frame = std::chrono::steady_clock::now();
         }
+        if (first_frame) g_scan_backoff.recordHit(ch->cfg.frequency_mhz * 1e6);
 
         appendDecoderJsonLog(*frame);
         uploader.sendTelemetry(*frame);
@@ -1484,9 +1496,11 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
     struct Candidate {
         double f_mhz;
         const RadioBackend* radio;
+        double snr_db;
     };
     std::vector<Candidate> candidates;
     candidates.reserve(peaks.size());
+    int held_back = 0;
     for (const auto& peak : peaks) {
         const double f_mhz = peak.frequency_hz / 1e6;
         if (isBlacklistedFrequencyMhz(cfg, f_mhz)) {
@@ -1495,16 +1509,46 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
             log.debug(msg.str());
             continue;
         }
-        candidates.push_back({f_mhz, peak.radio});
+        int remaining_sec = 0;
+        if (g_scan_backoff.holdBack(peak.frequency_hz, peak.snr_db, &remaining_sec)) {
+            ++held_back;
+            if (cfg.verbose) {
+                std::ostringstream msg;
+                msg << "scan hold back " << f_mhz << " MHz: checked recently without result, next check in "
+                    << remaining_sec << " s";
+                //log.debug(msg.str());
+            }
+            continue;
+        }
+        candidates.push_back({f_mhz, peak.radio, peak.snr_db});
+    }
+    if (held_back > 0) {
+        std::ostringstream msg;
+        msg << "scan: " << held_back << " candidate(s) held back (checked recently without result)";
+        //log.info(msg.str());
     }
     if (candidates.empty()) return;
 
     const int max_parallel = std::max(1, cfg.scan_parallel_detections);
 
+    struct TrialResult {
+        std::optional<ScanDetection> det;
+        bool checked = false;
+    };
     struct Trial {
         double f_mhz;
         const RadioBackend* radio;
-        std::future<std::optional<ScanDetection>> fut;
+        double snr_db;
+        std::future<TrialResult> fut;
+    };
+
+    auto noteMiss = [&](double f_mhz, double snr_db, const char* reason) {
+        const int hold = g_scan_backoff.recordMiss(f_mhz * 1e6, snr_db);
+        if (hold <= 0) return;
+        std::ostringstream msg;
+        msg << "scan " << reason << " at " << f_mhz << " MHz, next check in " << hold << " s"
+            << " (sooner if the level rises by " << cfg.scan_recheck_rise_db << " dB)";
+        //log.info(msg.str());
     };
     std::vector<Trial> inflight;
     size_t next_idx = 0;
@@ -1514,6 +1558,7 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
         while (next_idx < candidates.size() && inflight.size() < static_cast<size_t>(max_parallel)) {
             const double f_mhz = candidates[next_idx].f_mhz;
             const RadioBackend* radio = candidates[next_idx].radio;
+            const double snr_db = candidates[next_idx].snr_db;
             ++next_idx;
             {
                 std::lock_guard<std::mutex> lock(channels_mutex);
@@ -1534,8 +1579,11 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
             inflight.push_back(Trial{
                 f_mhz,
                 radio,
+                snr_db,
                 std::async(std::launch::async, [scan_cfg, f_mhz, &log]() {
-                    return runScanDetection(scan_cfg, f_mhz, log);
+                    TrialResult r;
+                    r.det = runScanDetection(scan_cfg, f_mhz, log, &r.checked);
+                    return r;
                 })
             });
         }
@@ -1552,9 +1600,13 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
 
             const double f_mhz = inflight[i].f_mhz;
             const RadioBackend* radio = inflight[i].radio;
-            auto det = inflight[i].fut.get();
+            const double snr_db = inflight[i].snr_db;
+            TrialResult result = inflight[i].fut.get();
+            const std::optional<ScanDetection>& det = result.det;
             inflight.erase(inflight.begin() + static_cast<long>(i));
             progressed = true;
+
+            if (!det && result.checked) noteMiss(f_mhz, snr_db, "no sonde");
 
             if (det) {
                 ++detections;
@@ -1568,13 +1620,13 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                     unsupported << "scan detected unsupported sonde " << det->sonde_type
                                 << " near " << f_mhz << " MHz";
                     log.warn(unsupported.str());
+                    noteMiss(f_mhz, snr_db, "unsupported sonde");
                 } else {
                     const double start_freq = det->frequency_mhz;
                     std::lock_guard<std::mutex> lock(channels_mutex);
                     if (static_cast<int>(channels.size()) < cfg.scan_max_channels &&
                         !frequencyAlreadyActiveLocked(channels, start_freq, cfg.scan_active_skip_width_khz)) {
                         Config chcfg = cfg;
-                        chcfg.scan_enabled = false;
                         chcfg.frequency_mhz = start_freq;
                         chcfg.decoder = decoder_name;
                         if (radio != nullptr) {
@@ -1611,9 +1663,15 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         if (!std::isnan(det->score)) hit << " score=" << det->score;
                         log.info(hit.str());
 
-                        auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender);
-                        channels.push_back(std::move(ch));
-                        writeChannelsJson(channels, log);
+                        try {
+                            auto ch = startChannelWithReader(chcfg, cfg, log, uploader, udp_sender);
+                            ch->scan_snr_db = snr_db;
+                            channels.push_back(std::move(ch));
+                            writeChannelsJson(channels, log);
+                        } catch (const std::exception& e) {
+                            log.warn(std::string("could not start decoder channel: ") + e.what());
+                            noteMiss(start_freq, snr_db, "decoder start failed");
+                        }
                     }
                 }
             }
@@ -1714,8 +1772,8 @@ static void scanWorkerThread(const Config& cfg, Logger& log, std::vector<std::un
             active_count = channels.size();
         }
         if (since_scan >= cfg.scan_interval_sec && static_cast<int>(active_count) < cfg.scan_max_channels) {
-            last_scan = now;
             scanForChannelsThreaded(cfg, log, channels, channels_mutex, uploader, udp_sender);
+            last_scan = std::chrono::steady_clock::now();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
@@ -1735,7 +1793,7 @@ int main(int argc, char** argv) {
         Config cfg = Config::load(args, config_path);
         applyRuntimeDefaults(cfg);
         validateRequiredDecoderFiles(cfg);
-        Logger log("", cfg.verbose);
+        Logger log(cfg.verbose);
         Uploader uploader(cfg, log);
         UdpSender udp_sender(cfg, log);
 
@@ -1748,7 +1806,7 @@ int main(int argc, char** argv) {
         {
             std::ostringstream msg;
             msg << "auto scan enabled range=" << cfg.scan_min_mhz << "-" << cfg.scan_max_mhz
-                << " MHz step=" << cfg.scan_step_khz << " kHz max_channels=" << cfg.scan_max_channels
+                << " MHz max_channels=" << cfg.scan_max_channels
                 << " radios=" << cfg.radios.size();
             log.info(msg.str());
         }
@@ -1774,12 +1832,29 @@ int main(int argc, char** argv) {
 
         uploader.maybeSendReceiverPosition();
 
+        {
+            ScanBackoff::Settings backoff;
+            backoff.min_sec = cfg.scan_recheck_min_sec;
+            backoff.max_sec = cfg.scan_recheck_max_sec;
+            backoff.rise_db = cfg.scan_recheck_rise_db;
+            backoff.match_hz = scanMatchWidthHz(cfg);
+            g_scan_backoff.configure(backoff);
+            std::ostringstream msg;
+            if (g_scan_backoff.enabled()) {
+                msg << "scan re-check back-off " << cfg.scan_recheck_min_sec << ".." << cfg.scan_recheck_max_sec
+                    << " s, early re-check on +" << cfg.scan_recheck_rise_db << " dB";
+            } else {
+                msg << "scan re-check back-off disabled (recheck_min_sec = 0)";
+            }
+            //log.info(msg.str());
+        }
+
         std::vector<std::unique_ptr<Channel>> channels;
         std::mutex channels_mutex;
         std::thread scan_thread;
         std::thread spectrum_thread;
 
-        writeChannelsJson(channels, log);  // replaces the list of a previous run
+        writeChannelsJson(channels, log);
 
         spectrum_thread = std::thread(spectrumWorkerThread, std::cref(cfg), std::ref(log));
         scan_thread = std::thread(scanWorkerThread, std::cref(cfg), std::ref(log), std::ref(channels),
@@ -1837,6 +1912,15 @@ int main(int argc, char** argv) {
                     }
 
                     if (remove) {
+                        if (!got_frame) {
+                            const int hold = g_scan_backoff.recordMiss(ch.cfg.frequency_mhz * 1e6, ch.scan_snr_db);
+                            if (hold > 0) {
+                                std::ostringstream msg;
+                                msg << "scan: " << ch.cfg.frequency_mhz << " MHz gave no valid frame, next check in "
+                                    << hold << " s";
+                                //log.info(msg.str());
+                            }
+                        }
                         stopChannel(ch, log);
                         it = channels.erase(it);
                         channels_changed = true;

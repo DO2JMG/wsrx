@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-constexpr const char* WSRX_VERSION = "0.1.09";
+constexpr const char* WSRX_VERSION = "0.1.10";
 
 struct RadioBackend {
     std::string name = "default";
@@ -15,7 +15,6 @@ struct RadioBackend {
 };
 
 struct Config {
-    std::string config_file = "config.ini";
     std::string callsign;
     double station_lat = 0.0;
     double station_lon = 0.0;
@@ -31,7 +30,6 @@ struct Config {
     std::vector<RadioBackend> radios;
 
     std::string decoder_dir = "decoder";
-    std::string wav_file;
     std::string rs92_ephemeris_file;
     std::string rs92_ephemeris_dir = "ephemeris";
 
@@ -54,10 +52,8 @@ struct Config {
     bool decoder_type_cf06ht03 = true; 
     bool decoder_type_s1 = true; 
 
-    bool scan_enabled = true;
     double scan_min_mhz = 400.0;
     double scan_max_mhz = 406.0;
-    int scan_step_khz = 10;
     double scan_threshold_db = 8.0;
     int scan_interval_sec = 30;
     int scan_tune_timeout_sec = 3;
@@ -73,15 +69,16 @@ struct Config {
     std::string scan_whitelist_file;
     std::vector<double> scan_blacklist_mhz;
     std::string scan_blacklist_file;
-    double scan_blacklist_width_khz = 5.0;
     double scan_active_skip_width_khz = 5.0;
     int scan_max_peaks = 10;
     int scan_parallel_detections = 3;
-    double scan_accept_score = 0.90;
     bool scan_fallback_when_active = false;
     int scan_fallback_candidates = 0;
     double scan_fallback_min_snr_db = 8.0;
     double scan_decoder_offset_hz = 0.0;
+    int scan_recheck_min_sec = 60;
+    int scan_recheck_max_sec = 300;
+    double scan_recheck_rise_db = 6.0;
     int scan_max_channels = 4;
     int channel_timeout_sec = 180;
 

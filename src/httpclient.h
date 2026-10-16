@@ -18,7 +18,6 @@ public:
     bool postJson(const std::string& url, const std::string& body, int timeout_sec, std::string& error);
     bool get(const std::string& url, int timeout_sec, std::string& error);
 
-    // Running transfers are aborted as soon as *flag becomes true (used on shutdown).
     void setAbortFlag(const std::atomic<bool>* flag) { abort_flag_ = flag; }
 
 private:

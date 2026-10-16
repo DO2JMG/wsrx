@@ -15,6 +15,7 @@
 
 namespace {
 
+
 constexpr const char* TELEMETRY_URL = WSRX_API_BASE "/telemetrie.php";
 constexpr const char* POSITION_URL = WSRX_API_BASE "/position.php";
 constexpr const char* ENCRYPT_URL = WSRX_API_BASE "/encrypt.php";
@@ -91,7 +92,7 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
-}  // namespace
+}
 
 Uploader::Uploader(const Config& cfg, Logger& log) : cfg_(cfg), log_(log) {
     last_position_upload_ = Clock::now() - std::chrono::seconds(cfg.receiver_position_interval_sec + 1);

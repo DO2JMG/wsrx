@@ -154,7 +154,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     Config cfg;
 
     auto ini = readIniFile(config_file);
-    cfg.config_file = config_file;
 
     cfg.callsign = iniGet(ini, "station.callsign", cfg.callsign);
     cfg.station_lat = iniDouble(ini, "station.lat", cfg.station_lat);
@@ -165,7 +164,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_pcm = iniGet(ini, "ka9q.pcm_name", cfg.ka9q_pcm);
 
     cfg.decoder_dir = iniGet(ini, "decoder.decoder_dir", cfg.decoder_dir);
-    cfg.wav_file = iniGet(ini, "decoder.wav_file", cfg.wav_file);
     cfg.rs92_ephemeris_file = iniGet(ini, "decoder.rs92_ephemeris_file", cfg.rs92_ephemeris_file);
     cfg.rs92_ephemeris_dir = iniGet(ini, "decoder.rs92_ephemeris_dir", cfg.rs92_ephemeris_dir);
     cfg.sample_rate = iniInt(ini, "decoder.sample_rate", cfg.sample_rate);
@@ -187,10 +185,8 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.decoder_type_cf06ht03 = iniBool(ini, "decoder.cf06ht03", cfg.decoder_type_cf06ht03);
     cfg.decoder_type_s1 = iniBool(ini, "decoder.s1", cfg.decoder_type_s1);
 
-    cfg.scan_enabled = true;
     cfg.scan_min_mhz = iniDouble(ini, "scan.min_mhz", cfg.scan_min_mhz);
     cfg.scan_max_mhz = iniDouble(ini, "scan.max_mhz", cfg.scan_max_mhz);
-    cfg.scan_step_khz = iniInt(ini, "scan.step_khz", cfg.scan_step_khz);
     cfg.scan_threshold_db = iniDouble(ini, "scan.threshold_db", cfg.scan_threshold_db);
     cfg.scan_interval_sec = iniInt(ini, "scan.interval_sec", cfg.scan_interval_sec);
     cfg.scan_tune_timeout_sec = iniInt(ini, "scan.tune_timeout_sec", cfg.scan_tune_timeout_sec);
@@ -206,15 +202,16 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_whitelist_file = iniGet(ini, "scan.whitelist_file", cfg.scan_whitelist_file);
     cfg.scan_blacklist_mhz = iniFrequencyListMhz(ini, "scan.blacklist_mhz");
     cfg.scan_blacklist_file = iniGet(ini, "scan.blacklist_file", cfg.scan_blacklist_file);
-    cfg.scan_blacklist_width_khz = iniDouble(ini, "scan.blacklist_width_khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = iniDouble(ini, "scan.active_skip_width_khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = iniInt(ini, "scan.max_peaks", cfg.scan_max_peaks);
     cfg.scan_parallel_detections = iniInt(ini, "scan.parallel_detections", cfg.scan_parallel_detections);
-    cfg.scan_accept_score = iniDouble(ini, "scan.accept_score", cfg.scan_accept_score);
     cfg.scan_fallback_when_active = iniBool(ini, "scan.fallback_when_active", cfg.scan_fallback_when_active);
     cfg.scan_fallback_candidates = iniInt(ini, "scan.fallback_candidates", cfg.scan_fallback_candidates);
     cfg.scan_fallback_min_snr_db = iniDouble(ini, "scan.fallback_min_snr_db", cfg.scan_fallback_min_snr_db);
     cfg.scan_decoder_offset_hz = iniDouble(ini, "scan.decoder_offset_hz", cfg.scan_decoder_offset_hz);
+    cfg.scan_recheck_min_sec = iniInt(ini, "scan.recheck_min_sec", cfg.scan_recheck_min_sec);
+    cfg.scan_recheck_max_sec = iniInt(ini, "scan.recheck_max_sec", cfg.scan_recheck_max_sec);
+    cfg.scan_recheck_rise_db = iniDouble(ini, "scan.recheck_rise_db", cfg.scan_recheck_rise_db);
     cfg.scan_max_channels = iniInt(ini, "scan.max_channels", cfg.scan_max_channels);
     cfg.channel_timeout_sec = iniInt(ini, "scan.channel_timeout_sec", cfg.channel_timeout_sec);
 
@@ -236,7 +233,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.ka9q_radio = args.get("ka9q-radio", cfg.ka9q_radio);
     cfg.ka9q_pcm = args.get("ka9q-pcm", cfg.ka9q_pcm);
     cfg.decoder_dir = args.get("decoder-dir", cfg.decoder_dir);
-    cfg.wav_file = args.get("wav", cfg.wav_file);
     cfg.rs92_ephemeris_file = args.get("rs92-ephemeris-file", cfg.rs92_ephemeris_file);
     cfg.rs92_ephemeris_dir = args.get("rs92-ephemeris-dir", cfg.rs92_ephemeris_dir);
 
@@ -251,10 +247,8 @@ Config Config::load(const Args& args, const std::string& config_file) {
     if (args.has("udp")) cfg.udp_enabled = true;
     cfg.udp_host = args.get("udp-host", cfg.udp_host);
     cfg.udp_port = args.getInt("udp-port", cfg.udp_port);
-    cfg.scan_enabled = true;
     cfg.scan_min_mhz = args.getDouble("scan-min", cfg.scan_min_mhz);
     cfg.scan_max_mhz = args.getDouble("scan-max", cfg.scan_max_mhz);
-    cfg.scan_step_khz = args.getInt("scan-step-khz", cfg.scan_step_khz);
     cfg.scan_threshold_db = args.getDouble("scan-threshold", cfg.scan_threshold_db);
     cfg.scan_interval_sec = args.getInt("scan-interval", cfg.scan_interval_sec);
     cfg.scan_tune_timeout_sec = args.getInt("scan-tune-timeout", cfg.scan_tune_timeout_sec);
@@ -270,15 +264,16 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.scan_whitelist_file = args.get("scan-whitelist-file", cfg.scan_whitelist_file);
     if (args.has("scan-blacklist-mhz")) cfg.scan_blacklist_mhz = parseFrequencyListMhz(args.get("scan-blacklist-mhz", ""));
     cfg.scan_blacklist_file = args.get("scan-blacklist-file", cfg.scan_blacklist_file);
-    cfg.scan_blacklist_width_khz = args.getDouble("scan-blacklist-width-khz", cfg.scan_blacklist_width_khz);
     cfg.scan_active_skip_width_khz = args.getDouble("scan-active-skip-width-khz", cfg.scan_active_skip_width_khz);
     cfg.scan_max_peaks = args.getInt("scan-max-peaks", cfg.scan_max_peaks);
     cfg.scan_parallel_detections = args.getInt("scan-parallel-detections", cfg.scan_parallel_detections);
-    cfg.scan_accept_score = args.getDouble("scan-accept-score", cfg.scan_accept_score);
     if (args.has("scan-fallback-when-active")) cfg.scan_fallback_when_active = true;
     cfg.scan_fallback_candidates = args.getInt("scan-fallback-candidates", cfg.scan_fallback_candidates);
     cfg.scan_fallback_min_snr_db = args.getDouble("scan-fallback-min-snr", cfg.scan_fallback_min_snr_db);
     cfg.scan_decoder_offset_hz = args.getDouble("scan-decoder-offset-hz", cfg.scan_decoder_offset_hz);
+    cfg.scan_recheck_min_sec = args.getInt("scan-recheck-min-sec", cfg.scan_recheck_min_sec);
+    cfg.scan_recheck_max_sec = args.getInt("scan-recheck-max-sec", cfg.scan_recheck_max_sec);
+    cfg.scan_recheck_rise_db = args.getDouble("scan-recheck-rise-db", cfg.scan_recheck_rise_db);
     cfg.scan_max_channels = args.getInt("scan-max-channels", cfg.scan_max_channels);
     cfg.channel_timeout_sec = args.getInt("channel-timeout", cfg.channel_timeout_sec);
     cfg.receiver_position_interval_sec = args.getInt("position-interval", cfg.receiver_position_interval_sec);
@@ -295,42 +290,36 @@ Config Config::load(const Args& args, const std::string& config_file) {
         throw std::runtime_error("Missing callsign. Set station.callsign in config.ini or use -callsign.");
     }
 
-    if (cfg.scan_enabled) {
-        if (cfg.scan_min_mhz <= 0.0 || cfg.scan_max_mhz <= cfg.scan_min_mhz) {
-            throw std::runtime_error("Invalid scan range. Set scan.min_mhz and scan.max_mhz in config.ini.");
-        }
-        if (cfg.scan_step_khz <= 0) {
-            throw std::runtime_error("Invalid scan.step_khz in config.ini.");
-        }
-        if (cfg.scan_max_channels < 1) cfg.scan_max_channels = 1;
-        if (cfg.channel_timeout_sec < 30) cfg.channel_timeout_sec = 30;
-        if (cfg.scan_interval_sec < 1) cfg.scan_interval_sec = 1;
-        if (cfg.scan_tune_timeout_sec < 1) cfg.scan_tune_timeout_sec = 1;
-        if (cfg.scan_detect_dwell_sec < 1) cfg.scan_detect_dwell_sec = 1;
-        if (cfg.scan_spectrum_dwell_sec < 1) cfg.scan_spectrum_dwell_sec = 1;
-        if (cfg.live_spectrum_interval_sec < 1) cfg.live_spectrum_interval_sec = 1;
-        if (cfg.live_spectrum_dwell_sec < 1) cfg.live_spectrum_dwell_sec = 1;
-        if (cfg.scan_power_bin_hz < 100) cfg.scan_power_bin_hz = 100;
-        if (cfg.scan_quantization_hz < 1000) cfg.scan_quantization_hz = 1000;
-        if (cfg.scan_min_distance_hz < 100) cfg.scan_min_distance_hz = 100;
-        if (cfg.scan_min_peak_width_hz < 0) cfg.scan_min_peak_width_hz = 0;
-        if (cfg.scan_blacklist_width_khz < 0.0) cfg.scan_blacklist_width_khz = 0.0;
-        if (cfg.scan_blacklist_width_khz > 100.0) cfg.scan_blacklist_width_khz = 100.0;
-        if (cfg.scan_active_skip_width_khz < 0.0) cfg.scan_active_skip_width_khz = 0.0;
-        if (cfg.scan_active_skip_width_khz > 100.0) cfg.scan_active_skip_width_khz = 100.0;
-        if (cfg.scan_max_peaks < 1) cfg.scan_max_peaks = 1;
-        if (cfg.scan_parallel_detections < 1) cfg.scan_parallel_detections = 1;
-        if (cfg.scan_parallel_detections > 32) cfg.scan_parallel_detections = 32;
-        const unsigned int cpu_count = std::thread::hardware_concurrency();
-        if (cpu_count > 0 && cfg.scan_parallel_detections > static_cast<int>(cpu_count)) {
-            cfg.scan_parallel_detections = static_cast<int>(cpu_count);
-        }
-        if (cfg.scan_fallback_candidates < 0) cfg.scan_fallback_candidates = 0;
-        if (cfg.scan_accept_score < 0.0) cfg.scan_accept_score = 0.0;
-        if (cfg.scan_accept_score > 1.0) cfg.scan_accept_score = 1.0;
-        if (std::fabs(cfg.scan_decoder_offset_hz) > 25000.0) {
-            throw std::runtime_error("Invalid scan.decoder_offset_hz. Expected value within +/-25000 Hz.");
-        }
+    if (cfg.scan_min_mhz <= 0.0 || cfg.scan_max_mhz <= cfg.scan_min_mhz) {
+        throw std::runtime_error("Invalid scan range. Set scan.min_mhz and scan.max_mhz in config.ini.");
+    }
+    if (cfg.scan_max_channels < 1) cfg.scan_max_channels = 1;
+    if (cfg.channel_timeout_sec < 30) cfg.channel_timeout_sec = 30;
+    if (cfg.scan_interval_sec < 1) cfg.scan_interval_sec = 1;
+    if (cfg.scan_tune_timeout_sec < 1) cfg.scan_tune_timeout_sec = 1;
+    if (cfg.scan_detect_dwell_sec < 1) cfg.scan_detect_dwell_sec = 1;
+    if (cfg.scan_spectrum_dwell_sec < 1) cfg.scan_spectrum_dwell_sec = 1;
+    if (cfg.live_spectrum_interval_sec < 1) cfg.live_spectrum_interval_sec = 1;
+    if (cfg.live_spectrum_dwell_sec < 1) cfg.live_spectrum_dwell_sec = 1;
+    if (cfg.scan_power_bin_hz < 100) cfg.scan_power_bin_hz = 100;
+    if (cfg.scan_quantization_hz < 1000) cfg.scan_quantization_hz = 1000;
+    if (cfg.scan_min_distance_hz < 100) cfg.scan_min_distance_hz = 100;
+    if (cfg.scan_min_peak_width_hz < 0) cfg.scan_min_peak_width_hz = 0;
+    if (cfg.scan_active_skip_width_khz < 0.0) cfg.scan_active_skip_width_khz = 0.0;
+    if (cfg.scan_active_skip_width_khz > 100.0) cfg.scan_active_skip_width_khz = 100.0;
+    if (cfg.scan_max_peaks < 1) cfg.scan_max_peaks = 1;
+    if (cfg.scan_parallel_detections < 1) cfg.scan_parallel_detections = 1;
+    if (cfg.scan_parallel_detections > 32) cfg.scan_parallel_detections = 32;
+    const unsigned int cpu_count = std::thread::hardware_concurrency();
+    if (cpu_count > 0 && cfg.scan_parallel_detections > static_cast<int>(cpu_count)) {
+        cfg.scan_parallel_detections = static_cast<int>(cpu_count);
+    }
+    if (cfg.scan_fallback_candidates < 0) cfg.scan_fallback_candidates = 0;
+    if (cfg.scan_recheck_min_sec < 0) cfg.scan_recheck_min_sec = 0;
+    if (cfg.scan_recheck_max_sec < cfg.scan_recheck_min_sec) cfg.scan_recheck_max_sec = cfg.scan_recheck_min_sec;
+    if (!(cfg.scan_recheck_rise_db >= 0.0)) cfg.scan_recheck_rise_db = 0.0;
+    if (std::fabs(cfg.scan_decoder_offset_hz) > 25000.0) {
+        throw std::runtime_error("Invalid scan.decoder_offset_hz. Expected value within +/-25000 Hz.");
     }
     if (cfg.station_lat == 0.0 && cfg.station_lon == 0.0) {
         throw std::runtime_error("Missing station position. Set station.lat/station.lon in config.ini or use -station-lat/-station-lon.");

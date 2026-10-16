@@ -161,7 +161,6 @@ std::optional<std::string> DecoderProcess::readLine(int timeout_ms) {
 
     if (auto line = popLineUnlocked()) return line;
 
-    // Hand out a last line without trailing newline once the decoder is gone.
     if (buffer_pos_ < buffer_.size() && (eof_ || !isRunningUnlocked())) {
         std::string line = buffer_.substr(buffer_pos_);
         buffer_.clear();

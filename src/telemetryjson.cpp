@@ -112,7 +112,7 @@ LookAngles calculateLookAngles(double aLatDeg, double aLonDeg, double aAltM,
     return {azimuth_deg, elevation_deg};
 }
 
-}  // namespace
+}
 
 namespace TelemetryJson {
 
@@ -229,7 +229,6 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     if (!std::isnan(frame.battery_v)) addNumber1(oss, first, "voltage", frame.battery_v);
     if (!std::isnan(frame.tx_power_raw)) addInt(oss, first, "tx_power", static_cast<int>(std::llround(frame.tx_power_raw)));
     if (!std::isnan(frame.burstkilltimer_sec)) addInt(oss, first, "burstkilltimer", static_cast<int>(std::llround(frame.burstkilltimer_sec)));
-    if (!std::isnan(frame.killtimer_sec)) addInt(oss, first, "killtimer", static_cast<int>(std::llround(frame.killtimer_sec)));
     if (frame.sats >= 0) addInt(oss, first, "sat", frame.sats);
     if (!frame.aux.empty()) addString(oss, first, "aux", frame.aux);
     if (!frame.raw_datetime.empty()) addString(oss, first, "datetime", frame.raw_datetime);
@@ -245,4 +244,4 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     return oss.str();
 }
 
-}  // namespace TelemetryJson
+}

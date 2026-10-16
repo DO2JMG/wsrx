@@ -51,7 +51,7 @@ bool runCurl(const std::string& cmd, std::string& error) {
 }
 #endif
 
-}  // namespace
+}
 
 void HttpClient::globalInit() {
 #ifdef WSRX_HAVE_LIBCURL

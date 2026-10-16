@@ -9,4 +9,4 @@ namespace Rs92Ephemeris {
 
 std::string ensure(const Config& cfg, Logger& log);
 
-}  // namespace Rs92Ephemeris
+}

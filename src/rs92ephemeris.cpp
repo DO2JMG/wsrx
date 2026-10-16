@@ -30,9 +30,9 @@ bool fileNonEmpty(const std::string& path) {
 }
 
 struct YearDay {
-    int year = 0;   // e.g. 2026
-    int yy = 0;     // 2-digit year, e.g. 26
-    int doy = 0;    // day of year, 1-366
+    int year = 0;
+    int yy = 0;
+    int doy = 0;
 };
 
 YearDay utcDateMinusDays(int days_back) {
@@ -42,7 +42,7 @@ YearDay utcDateMinusDays(int days_back) {
     YearDay yd;
     yd.year = tm.tm_year + 1900;
     yd.yy = yd.year % 100;
-    yd.doy = tm.tm_yday + 1;  // tm_yday is 0-based
+    yd.doy = tm.tm_yday + 1;
     return yd;
 }
 
@@ -167,7 +167,6 @@ bool tryDownload(const YearDay& yd, const std::string& rnx_name, const std::stri
         std::error_code ec;
         std::filesystem::rename(tmp_decompressed, dest_path, ec);
         if (ec) {
-            // Cross-filesystem fallback.
             std::filesystem::copy_file(tmp_decompressed, dest_path, std::filesystem::copy_options::overwrite_existing, ec);
             std::filesystem::remove(tmp_decompressed);
         }
@@ -209,13 +208,13 @@ std::string mostRecentCachedFile(const std::string& dest_dir) {
     return best_path;
 }
 
-}  // namespace
+}
 
 namespace Rs92Ephemeris {
 
 std::string ensure(const Config& cfg, Logger& log) {
     if (!cfg.rs92_ephemeris_file.empty()) {
-        return cfg.rs92_ephemeris_file;  // manual override, used as-is
+        return cfg.rs92_ephemeris_file;
     }
 
     const std::string dir = cfg.rs92_ephemeris_dir;
@@ -231,7 +230,7 @@ std::string ensure(const Config& cfg, Logger& log) {
     const std::string today_path = dir + "/" + today_name;
 
     if (fileNonEmpty(today_path)) {
-        return today_path;  // already have today's file, no network needed
+        return today_path;
     }
 
     if (!commandExists("curl")) {
@@ -263,4 +262,4 @@ std::string ensure(const Config& cfg, Logger& log) {
     return {};
 }
 
-}  // namespace Rs92Ephemeris
+}

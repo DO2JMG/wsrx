@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <regex>
-#include <ctime>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -146,7 +145,7 @@ std::string normalizeM10Serial(const std::string& working_serial) {
 
 std::string normalizeM10M20(const std::string& serial, const std::string& type) {
     const std::string upper_type = upperCopy(type);
-    std::string upper_serial = upperCopy(serial);
+    const std::string upper_serial = upperCopy(serial);
 
     if (startsWith(upper_serial, "ME")) return upper_serial;
 
@@ -154,7 +153,6 @@ std::string normalizeM10M20(const std::string& serial, const std::string& type) 
     for (const char* prefix : {"M10-", "M20-", "M10_", "M20_"}) {
         if (startsWith(upper_serial, prefix)) {
             working_serial = working_serial.substr(std::strlen(prefix));
-            upper_serial = upper_serial.substr(std::strlen(prefix));
             break;
         }
     }
@@ -359,7 +357,7 @@ std::string hhmmssFromIsoUtc(const std::string& iso) {
 }
 }
 
-std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line, double frequency_mhz, const std::string& receiver) {
+std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line, double frequency_mhz) {
     if (line.find_first_not_of(" \t\r") == std::string::npos) return std::nullopt;
     {
         static const std::regex hdr_re(R"(^\s*\[\s*([0-9]+)\]\s*\(([A-Za-z0-9_.-]+)\))");
@@ -376,9 +374,7 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
 
     TelemetryFrame f;
     f.frequency_mhz = frequency_mhz;
-    f.receiver = receiver;
     f.raw_line = line;
-    f.timestamp = std::time(nullptr);
 
     auto id = extractString(line, "id");
     auto ser = extractString(line, "serial");
