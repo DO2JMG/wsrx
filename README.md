@@ -327,3 +327,34 @@ cd ~/wsrx/aprs
 ```
 
 ## Optional: GPS Position
+
+You can use this tool to retrieve your location from a GPS device. WSRX then displays it on the map and sends it to wettersonde.net.
+
+```
+cd ~/wsrx/gps
+make clean
+make
+```
+
+Change the ```DEVICE``` and ```BAUD``` settings.
+
+```
+cd ~/wsrx/gps
+nano wsrxgps
+```
+
+To read the GPS receiver without root privileges, add your user to the `dialout` group:
+
+```
+sudo usermod -aG dialout $USER
+```
+
+Log out and back in (or reboot) for the change to take effect. Verify with `groups`; `dialout` should be listed.
+
+Starting and stopping the GPS client
+
+```
+cd ~/wsrx/gps
+./wsrxgps.sh start
+./wsrxgps.sh stop
+```
