@@ -1,3 +1,8 @@
+Version 0.1.10 
+- Optionally, you can use a GPS receiver
+- Your location is displayed on the map
+- Bug fixed
+  
 Version 0.1.09 
 - Please install... sudo apt install libcurl4-openssl-dev
 - Bug fixed uploader (timing problem)
