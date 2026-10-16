@@ -62,7 +62,7 @@ What this software can do!
 - [Configuring KA9Q for Airspy Mini](#configuring-ka9q-for-airspy-mini)
 - [Optional: systemd service files](#optional-systemd-service-files)
 - [Optional: APRS Upload](#optional-aprs-upload)
-- [Optional: GPS-Position](#gps-position)
+- [Optional: GPS Position](#gps-position)
 
 ### Hardware required :
 
@@ -326,4 +326,4 @@ cd ~/wsrx/aprs
 ./aprs.sh stop
 ```
 
-## Optional: GPS-Position
+## Optional: GPS Position
