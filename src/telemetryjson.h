@@ -1,15 +1,12 @@
 #pragma once
 
+#include "config.h"
 #include "telemetryframe.h"
 #include <string>
 
 namespace TelemetryJson {
 
-struct StationLocation {
-    double lat;
-    double lon;
-    double alt_m;
-};
+using StationLocation = ::StationLocation;
 
 bool hasGpsFix(const TelemetryFrame& frame);
 bool validTypeSerial(const TelemetryFrame& frame);

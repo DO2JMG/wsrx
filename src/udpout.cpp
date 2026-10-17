@@ -10,7 +10,13 @@ namespace {
 constexpr const char* APP_VERSION = "0.1.09";
 }
 
-UdpSender::UdpSender(const Config& cfg, Logger& log) : cfg_(cfg), log_(log) {}
+UdpSender::UdpSender(const Config& cfg, Logger& log)
+    : cfg_(cfg), log_(log), station_{cfg.station_lat, cfg.station_lon, cfg.station_alt} {}
+
+void UdpSender::setStationLocation(const StationLocation& station) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    station_ = station;
+}
 
 UdpSender::~UdpSender() {
     if (sock_ >= 0) {
@@ -20,6 +26,7 @@ UdpSender::~UdpSender() {
 }
 
 bool UdpSender::resolveDestination() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (destination_resolved_) return destination_valid_;
     destination_resolved_ = true;
 
@@ -74,7 +81,11 @@ bool UdpSender::sendTelemetry(const TelemetryFrame& frame) {
         return false;
     }
 
-    const TelemetryJson::StationLocation station{cfg_.station_lat, cfg_.station_lon, cfg_.station_alt};
+    StationLocation station;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        station = station_;
+    }
     const std::string data = TelemetryJson::buildTelemetryJson(frame, cfg_.callsign, APP_VERSION, &station);
 
     if (cfg_.dry_run) {

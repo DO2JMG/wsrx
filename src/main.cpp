@@ -14,6 +14,7 @@
 #include <chrono>
 #include <ctime>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -188,6 +189,59 @@ static void truncateLogsIfDue(Logger& log) {
 static bool fileExists(const std::string& path) {
     std::error_code ec;
     return std::filesystem::exists(path, ec);
+}
+
+static constexpr auto kStationCheckInterval = std::chrono::seconds(2);
+
+struct ConfigStamp {
+    std::filesystem::file_time_type mtime{};
+    std::uintmax_t size = 0;
+    bool operator==(const ConfigStamp& other) const { return mtime == other.mtime && size == other.size; }
+};
+
+static bool readConfigStamp(const std::string& path, ConfigStamp& stamp) {
+    std::error_code ec;
+    stamp.mtime = std::filesystem::last_write_time(path, ec);
+    if (ec) return false;
+    stamp.size = std::filesystem::file_size(path, ec);
+    return !ec;
+}
+
+struct StationWatch {
+    StationLocation current;
+    ConfigStamp applied;
+    ConfigStamp failed;
+    bool warned = false;
+    std::chrono::steady_clock::time_point last_check{};
+};
+
+static void followStationPosition(StationWatch& watch, const Args& args, const std::string& config_path,
+                                  Uploader& uploader, UdpSender& udp_sender, Logger& log) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - watch.last_check < kStationCheckInterval) return;
+    watch.last_check = now;
+
+    ConfigStamp stamp;
+    if (!readConfigStamp(config_path, stamp) || stamp == watch.applied) return;
+
+    StationLocation station;
+    try {
+        station = Config::loadStation(args, config_path);
+    } catch (const std::exception& e) {
+        if (!(stamp == watch.failed)) {
+            watch.failed = stamp;
+            watch.warned = false;
+        } else if (!watch.warned) {
+            log.warn(std::string("config.ini: station position not applied: ") + e.what());
+            watch.warned = true;
+        }
+        return;
+    }
+    watch.applied = stamp;
+    if (station.lat == watch.current.lat && station.lon == watch.current.lon && station.alt_m == watch.current.alt_m) return;
+    watch.current = station;
+    uploader.setStationLocation(station);
+    udp_sender.setStationLocation(station);
 }
 
 static std::string shellQuote(const std::string& value) {
@@ -1270,7 +1324,6 @@ static std::optional<ScanDetection> runSingleScanDetectionRefined(const Config& 
             std::ostringstream msg;
             msg << "scan refine " << refined->sonde_type << " re-centered at " << current_mhz
                 << " MHz -> " << refined->frequency_mhz << " MHz score=" << refined->score;
-            //log.debug(msg.str());
         }
         det = refined;
     }
@@ -1516,7 +1569,6 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                 std::ostringstream msg;
                 msg << "scan hold back " << f_mhz << " MHz: checked recently without result, next check in "
                     << remaining_sec << " s";
-                //log.debug(msg.str());
             }
             continue;
         }
@@ -1525,7 +1577,6 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
     if (held_back > 0) {
         std::ostringstream msg;
         msg << "scan: " << held_back << " candidate(s) held back (checked recently without result)";
-        //log.info(msg.str());
     }
     if (candidates.empty()) return;
 
@@ -1548,7 +1599,6 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
         std::ostringstream msg;
         msg << "scan " << reason << " at " << f_mhz << " MHz, next check in " << hold << " s"
             << " (sooner if the level rises by " << cfg.scan_recheck_rise_db << " dB)";
-        //log.info(msg.str());
     };
     std::vector<Trial> inflight;
     size_t next_idx = 0;
@@ -1790,7 +1840,10 @@ int main(int argc, char** argv) {
 
         g_base_dir = executableDir(argv[0]);
         const std::string config_path = joinPath(g_base_dir, "config.ini");
+        StationWatch station_watch;
+        readConfigStamp(config_path, station_watch.applied);
         Config cfg = Config::load(args, config_path);
+        station_watch.current = StationLocation{cfg.station_lat, cfg.station_lon, cfg.station_alt};
         applyRuntimeDefaults(cfg);
         validateRequiredDecoderFiles(cfg);
         Logger log(cfg.verbose);
@@ -1846,7 +1899,6 @@ int main(int argc, char** argv) {
             } else {
                 msg << "scan re-check back-off disabled (recheck_min_sec = 0)";
             }
-            //log.info(msg.str());
         }
 
         std::vector<std::unique_ptr<Channel>> channels;
@@ -1866,6 +1918,7 @@ int main(int argc, char** argv) {
         auto last_log_cleanup = std::chrono::steady_clock::now();
 
         while (!g_shutdown) {
+            followStationPosition(station_watch, args, config_path, uploader, udp_sender, log);
             uploader.maybeSendReceiverPosition();
 
             if (std::chrono::steady_clock::now() - last_log_cleanup >= kSondeLogCleanupInterval) {
@@ -1918,7 +1971,6 @@ int main(int argc, char** argv) {
                                 std::ostringstream msg;
                                 msg << "scan: " << ch.cfg.frequency_mhz << " MHz gave no valid frame, next check in "
                                     << hold << " s";
-                                //log.info(msg.str());
                             }
                         }
                         stopChannel(ch, log);

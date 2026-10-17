@@ -23,6 +23,9 @@ constexpr const char* ENCRYPT_URL = WSRX_API_BASE "/encrypt.php";
 constexpr int kUploadWorkers = 2;
 constexpr int kHttpTimeoutSec = 10;
 constexpr auto kForgetSondeAfter = std::chrono::hours(1);
+constexpr double kStationMovedM = 100.0;
+constexpr double kStationMovedAltM = 50.0;
+constexpr auto kStationMovedMinInterval = std::chrono::seconds(60);
 constexpr auto kPruneInterval = std::chrono::minutes(5);
 
 std::string upperCopy(std::string s) {
@@ -92,10 +95,22 @@ void addNumber1(std::ostringstream& oss, bool& first, const std::string& key, do
     oss << '"' << key << "\":" << std::fixed << std::setprecision(1) << value << std::defaultfloat;
 }
 
+bool stationMoved(const StationLocation& from, const StationLocation& to) {
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    double dlon = to.lon - from.lon;
+    if (dlon > 180.0) dlon -= 360.0;
+    if (dlon < -180.0) dlon += 360.0;
+    const double east = dlon * std::cos((from.lat + to.lat) / 2.0 * kDegToRad);
+    const double distance_m = std::hypot(east, to.lat - from.lat) * kDegToRad * 6371000.0;
+    return distance_m >= kStationMovedM || std::fabs(to.alt_m - from.alt_m) >= kStationMovedAltM;
+}
+
 }
 
 Uploader::Uploader(const Config& cfg, Logger& log) : cfg_(cfg), log_(log) {
     last_position_upload_ = Clock::now() - std::chrono::seconds(cfg.receiver_position_interval_sec + 1);
+    station_ = StationLocation{cfg.station_lat, cfg.station_lon, cfg.station_alt};
+    uploaded_station_ = station_;
     last_prune_ = Clock::now();
 
     HttpClient::globalInit();
@@ -194,26 +209,42 @@ void Uploader::sendTelemetry(const TelemetryFrame& frame) {
     if (rate_limited) log_.debug("Rate-limited telemetry for " + frame.serial);
 }
 
+void Uploader::setStationLocation(const StationLocation& station) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    station_ = station;
+}
+
 void Uploader::maybeSendReceiverPosition() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopping_) return;
 
     const auto now = Clock::now();
-    const auto diff = std::chrono::duration_cast<std::chrono::seconds>(now - last_position_upload_).count();
-    if (diff < cfg_.receiver_position_interval_sec) return;
+    const auto since = now - last_position_upload_;
+    const bool moved = stationMoved(uploaded_station_, station_);
+    if (since < std::chrono::seconds(cfg_.receiver_position_interval_sec) &&
+        !(moved && since >= kStationMovedMinInterval)) {
+        return;
+    }
 
     std::ostringstream oss;
     bool first = true;
     oss << '{';
     addString(oss, first, "callsign", cfg_.callsign);
-    addNumberRaw(oss, first, "latitude", cfg_.station_lat);
-    addNumberRaw(oss, first, "longitude", cfg_.station_lon);
-    addNumber1(oss, first, "altitude", cfg_.station_alt);
+    addNumberRaw(oss, first, "latitude", station_.lat);
+    addNumberRaw(oss, first, "longitude", station_.lon);
+    addNumber1(oss, first, "altitude", station_.alt_m);
     addString(oss, first, "software", "wsrx");
     addString(oss, first, "version", WSRX_VERSION);
     oss << '}';
 
     last_position_upload_ = now;
+    uploaded_station_ = station_;
+    if (moved) {
+        std::ostringstream msg;
+        msg << "receiver position changed: lat=" << std::fixed << std::setprecision(6) << station_.lat
+            << " lon=" << station_.lon << " alt=" << std::setprecision(0) << station_.alt_m << " m";
+        log_.info(msg.str());
+    }
 
     if (cfg_.dry_run || !cfg_.upload_enabled) {
         log_.info("DRY-RUN receiver position JSON: " + oss.str());

@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "telemetryframe.h"
+#include <mutex>
 #include <string>
 
 #include <netinet/in.h>
@@ -18,6 +19,7 @@ public:
     UdpSender& operator=(const UdpSender&) = delete;
 
     bool sendTelemetry(const TelemetryFrame& frame);
+    void setStationLocation(const StationLocation& station);
 
 private:
     bool sendDatagram(const std::string& data);
@@ -25,6 +27,8 @@ private:
 
     const Config& cfg_;
     Logger& log_;
+    std::mutex mutex_;
+    StationLocation station_;
     int sock_ = -1;
     bool destination_resolved_ = false;
     bool destination_valid_ = false;

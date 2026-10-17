@@ -141,6 +141,34 @@ std::vector<double> mergeUniqueFrequenciesMhz(std::vector<double> base, const st
     return base;
 }
 
+double stationValue(const std::unordered_map<std::string, std::string>& ini, const Args& args, const std::string& key) {
+    double value = 0.0;
+    try {
+        value = iniDouble(ini, "station." + key, 0.0);
+    } catch (const std::exception&) {
+        throw std::runtime_error("Invalid station." + key + " in config.ini.");
+    }
+    return args.getDouble("station-" + key, value);
+}
+
+StationLocation stationFromIni(const std::unordered_map<std::string, std::string>& ini, const Args& args) {
+    StationLocation station;
+    station.lat = stationValue(ini, args, "lat");
+    station.lon = stationValue(ini, args, "lon");
+    station.alt_m = stationValue(ini, args, "alt");
+    if (station.lat == 0.0 && station.lon == 0.0) {
+        throw std::runtime_error("Missing station position. Set station.lat/station.lon in config.ini or use -station-lat/-station-lon.");
+    }
+    if (!(std::fabs(station.lat) <= 90.0) || !(std::fabs(station.lon) <= 180.0) || !std::isfinite(station.alt_m)) {
+        throw std::runtime_error("Invalid station position in config.ini (lat -90..90, lon -180..180).");
+    }
+    return station;
+}
+
+}
+
+StationLocation Config::loadStation(const Args& args, const std::string& config_file) {
+    return stationFromIni(readIniFile(config_file), args);
 }
 
 Config Config::load(const Args& args, const std::string& config_file) {
@@ -156,9 +184,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     auto ini = readIniFile(config_file);
 
     cfg.callsign = iniGet(ini, "station.callsign", cfg.callsign);
-    cfg.station_lat = iniDouble(ini, "station.lat", cfg.station_lat);
-    cfg.station_lon = iniDouble(ini, "station.lon", cfg.station_lon);
-    cfg.station_alt = iniDouble(ini, "station.alt", cfg.station_alt);
 
     cfg.ka9q_radio = iniGet(ini, "ka9q.radio_name", cfg.ka9q_radio);
     cfg.ka9q_pcm = iniGet(ini, "ka9q.pcm_name", cfg.ka9q_pcm);
@@ -226,9 +251,6 @@ Config Config::load(const Args& args, const std::string& config_file) {
     cfg.verbose = iniBool(ini, "runtime.verbose", cfg.verbose);
     cfg.decoder_debug = iniBool(ini, "runtime.decoder_debug", cfg.decoder_debug);
     cfg.callsign = args.get("callsign", cfg.callsign);
-    cfg.station_lat = args.getDouble("station-lat", cfg.station_lat);
-    cfg.station_lon = args.getDouble("station-lon", cfg.station_lon);
-    cfg.station_alt = args.getDouble("station-alt", cfg.station_alt);
 
     cfg.ka9q_radio = args.get("ka9q-radio", cfg.ka9q_radio);
     cfg.ka9q_pcm = args.get("ka9q-pcm", cfg.ka9q_pcm);
@@ -321,9 +343,10 @@ Config Config::load(const Args& args, const std::string& config_file) {
     if (std::fabs(cfg.scan_decoder_offset_hz) > 25000.0) {
         throw std::runtime_error("Invalid scan.decoder_offset_hz. Expected value within +/-25000 Hz.");
     }
-    if (cfg.station_lat == 0.0 && cfg.station_lon == 0.0) {
-        throw std::runtime_error("Missing station position. Set station.lat/station.lon in config.ini or use -station-lat/-station-lon.");
-    }
+    const StationLocation station = stationFromIni(ini, args);
+    cfg.station_lat = station.lat;
+    cfg.station_lon = station.lon;
+    cfg.station_alt = station.alt_m;
 
     for (int i = 1; i <= 16; ++i) {
         const std::string prefix = "radio" + std::to_string(i) + ".";

@@ -25,6 +25,7 @@ public:
     Uploader& operator=(const Uploader&) = delete;
 
     void sendTelemetry(const TelemetryFrame& frame);
+    void setStationLocation(const StationLocation& station);
     void maybeSendReceiverPosition();
 
     void stop();
@@ -63,6 +64,8 @@ private:
     std::deque<Request> requests_;    
     std::unordered_set<std::string> encrypt_notified_serials_;
     Clock::time_point last_position_upload_;
+    StationLocation station_;
+    StationLocation uploaded_station_;
     Clock::time_point last_prune_;
     bool stopping_ = false;
     std::atomic<bool> abort_transfers_{false};

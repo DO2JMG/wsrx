@@ -6,6 +6,12 @@
 
 constexpr const char* WSRX_VERSION = "0.1.10";
 
+struct StationLocation {
+    double lat = 0.0;
+    double lon = 0.0;
+    double alt_m = 0.0;
+};
+
 struct RadioBackend {
     std::string name = "default";
     std::string ka9q_radio;
@@ -94,4 +100,5 @@ struct Config {
 
 
     static Config load(const Args& args, const std::string& config_file);
+    static StationLocation loadStation(const Args& args, const std::string& config_file);
 };
