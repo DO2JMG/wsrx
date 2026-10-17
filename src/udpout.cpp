@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 namespace {
-constexpr const char* APP_VERSION = "0.1.09";
+constexpr const char* APP_VERSION = "0.1.10";
 }
 
 UdpSender::UdpSender(const Config& cfg, Logger& log)
