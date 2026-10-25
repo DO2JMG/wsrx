@@ -140,7 +140,7 @@ void Uploader::stop() {
 }
 
 int Uploader::minUploadIntervalMs(const TelemetryFrame& frame) {
-    static constexpr int DEFAULT_MIN_UPLOAD_INTERVAL_MS = 20000;
+    static constexpr int DEFAULT_MIN_UPLOAD_INTERVAL_MS = 10000;
     static constexpr int FAST_MIN_UPLOAD_INTERVAL_MS = 1000;
     static constexpr double FAST_MAX_ALTITUDE_M = 1000.0;
     static constexpr double FAST_MIN_SPEED_KMH = 3.0;

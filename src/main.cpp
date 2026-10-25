@@ -1685,8 +1685,9 @@ static void scanForChannelsThreaded(const Config& cfg, Logger& log, std::vector<
                         }
 
                         if (decoder_name == "s1") {
-                            chcfg.ka9q_low_hz = -30000;
-                            chcfg.ka9q_high_hz = 30000;
+                            chcfg.sample_rate = 96000;
+                            chcfg.ka9q_low_hz = -45000;
+                            chcfg.ka9q_high_hz = 45000;
                         }
 
                         if (decoder_name == "rs41") {

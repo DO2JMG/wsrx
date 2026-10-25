@@ -27,6 +27,10 @@ struct TelemetryFrame {
 
     double tx_power_raw = NAN;
 
+
+    std::string mainboard;
+    int mainboard_fw = -1;
+
     std::string timestamp_hhmmss;
     std::string raw_datetime;
     std::string raw_line;

@@ -429,6 +429,10 @@ std::optional<TelemetryFrame> TelemetryParser::parseLine(const std::string& line
     if (auto v = extractNumber(line, "freq")) f.tx_frequency_mhz = normalizeFrequencyToMhz(*v);
     if (auto v = extractNumber(line, "tx_frequency")) f.tx_frequency_mhz = normalizeFrequencyToMhz(*v);
 
+    if (auto x = extractString(line, "aux")) f.aux = *x;
+    if (auto x = extractString(line, "rs41_mainboard")) f.mainboard = *x;
+    if (auto v = extractNumber(line, "rs41_mainboard_fw")) f.mainboard_fw = static_cast<int>(*v);
+
     if (std::isnan(f.lat) || std::isnan(f.lon) || std::isnan(f.alt_m)) {
         static const std::regex pos_re(
             R"(lat:\s*(-?[0-9]+(?:\.[0-9]+)?)\s+lon:\s*(-?[0-9]+(?:\.[0-9]+)?)\s+alt:\s*(-?[0-9]+(?:\.[0-9]+)?)(?:\s+vH:\s*(-?[0-9]+(?:\.[0-9]+)?))?(?:\s+D:\s*(-?[0-9]+(?:\.[0-9]+)?))?(?:\s+vV:\s*(-?[0-9]+(?:\.[0-9]+)?))?)"

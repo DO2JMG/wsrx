@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-constexpr const char* WSRX_VERSION = "0.1.10";
+constexpr const char* WSRX_VERSION = "0.1.11";
 
 struct StationLocation {
     double lat = 0.0;

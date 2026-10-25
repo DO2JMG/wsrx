@@ -233,6 +233,11 @@ std::string buildTelemetryJson(const TelemetryFrame& frame, const std::string& c
     if (!frame.aux.empty()) addString(oss, first, "aux", frame.aux);
     if (!frame.raw_datetime.empty()) addString(oss, first, "datetime", frame.raw_datetime);
 
+    if (!frame.aux.empty()) addString(oss, first, "aux", frame.aux);
+    if (!frame.mainboard.empty()) addString(oss, first, "mainboard", frame.mainboard);
+    if (frame.mainboard_fw >= 0) addInt(oss, first, "mainboard_fw", frame.mainboard_fw);
+
+
     if (station != nullptr && !std::isnan(frame.lat) && !std::isnan(frame.lon) && !std::isnan(frame.alt_m)) {
         const LookAngles look = calculateLookAngles(station->lat, station->lon, station->alt_m,
                                                       frame.lat, frame.lon, frame.alt_m);
