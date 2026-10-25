@@ -286,10 +286,42 @@ struct App {
     std::string update_log;
     std::string web_auth_user;
     std::string web_auth_pass;
-    double station_lat = std::numeric_limits<double>::quiet_NaN();
-    double station_lon = std::numeric_limits<double>::quiet_NaN();
-    double station_alt = 0.0;
 };
+
+struct StationPos {
+    double lat = std::numeric_limits<double>::quiet_NaN();
+    double lon = std::numeric_limits<double>::quiet_NaN();
+    double alt = 0.0;
+};
+
+static std::mutex g_station_mutex;
+static StationPos g_station;
+static bool g_station_loaded = false;
+static struct timespec g_station_mtime{};
+static off_t g_station_size = -1;
+
+static StationPos current_station(const App &app) {
+    std::lock_guard<std::mutex> lock(g_station_mutex);
+    struct stat st{};
+    if (stat(app.config_file.c_str(), &st) != 0) return g_station;
+    if (g_station_loaded && st.st_size == g_station_size &&
+        st.st_mtim.tv_sec == g_station_mtime.tv_sec && st.st_mtim.tv_nsec == g_station_mtime.tv_nsec) {
+        return g_station;
+    }
+    const std::string ini_text = read_file(app.config_file, 256 * 1024);
+    const std::string lat_str = ini_value(ini_text, "lat");
+    const std::string lon_str = ini_value(ini_text, "lon");
+    const std::string alt_str = ini_value(ini_text, "alt");
+    StationPos station;
+    try { if (!lat_str.empty()) station.lat = std::stod(lat_str); } catch (...) {}
+    try { if (!lon_str.empty()) station.lon = std::stod(lon_str); } catch (...) {}
+    try { if (!alt_str.empty()) station.alt = std::stod(alt_str); } catch (...) {}
+    g_station = station;
+    g_station_loaded = true;
+    g_station_mtime = st.st_mtim;
+    g_station_size = st.st_size;
+    return g_station;
+}
 
 static constexpr time_t kStatusRefreshSec = 15;
 
@@ -1388,6 +1420,7 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
         return a.modified > b.modified;
     });
 
+    const StationPos station = current_station(app);
     std::ostringstream js;
     js << "{\"radiosondes\":[";
     for (size_t i = 0; i < items.size(); ++i) {
@@ -1414,25 +1447,25 @@ static std::string radiosondes_json(const App &app, long long max_age_sec, bool 
         if (std::isfinite(it.last_vel_v)) js << std::fixed << std::setprecision(2) << it.last_vel_v; else js << "null";
         js << ",\"distance_km\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) &&
-            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            std::isfinite(station.lat) && std::isfinite(station.lon)) {
             js << std::fixed << std::setprecision(1)
-               << haversine_km(app.station_lat, app.station_lon, it.last_lat, it.last_lon);
+               << haversine_km(station.lat, station.lon, it.last_lat, it.last_lon);
         } else {
             js << "null";
         }
         js << ",\"bearing_deg\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) &&
-            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            std::isfinite(station.lat) && std::isfinite(station.lon)) {
             js << std::fixed << std::setprecision(0)
-               << bearing_deg(app.station_lat, app.station_lon, it.last_lat, it.last_lon);
+               << bearing_deg(station.lat, station.lon, it.last_lat, it.last_lon);
         } else {
             js << "null";
         }
         js << ",\"elevation_deg\":";
         if (std::isfinite(it.last_lat) && std::isfinite(it.last_lon) && std::isfinite(it.last_alt) &&
-            std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+            std::isfinite(station.lat) && std::isfinite(station.lon)) {
             js << std::fixed << std::setprecision(1)
-               << elevation_deg(app.station_lat, app.station_lon, app.station_alt,
+               << elevation_deg(station.lat, station.lon, station.alt,
                                  it.last_lat, it.last_lon, it.last_alt);
         } else {
             js << "null";
@@ -1613,19 +1646,20 @@ static std::string radiosonde_detail_json(const App &app, const std::string &ser
         }
     }
 
+    const StationPos station = current_station(app);
     if (num_fields.count("lat") && num_fields.count("lon") &&
-        std::isfinite(app.station_lat) && std::isfinite(app.station_lon)) {
+        std::isfinite(station.lat) && std::isfinite(station.lon)) {
         js << ",\"distance_km\":" << std::fixed << std::setprecision(1)
-           << haversine_km(app.station_lat, app.station_lon, num_fields["lat"], num_fields["lon"]);
+           << haversine_km(station.lat, station.lon, num_fields["lat"], num_fields["lon"]);
         js << ",\"bearing_deg\":" << std::fixed << std::setprecision(0)
-           << bearing_deg(app.station_lat, app.station_lon, num_fields["lat"], num_fields["lon"]);
+           << bearing_deg(station.lat, station.lon, num_fields["lat"], num_fields["lon"]);
 
         double target_alt = num_fields.count("alt") ? num_fields["alt"]
                            : (num_fields.count("altitude") ? num_fields["altitude"]
                            : std::numeric_limits<double>::quiet_NaN());
         if (std::isfinite(target_alt)) {
             js << ",\"elevation_deg\":" << std::fixed << std::setprecision(1)
-               << elevation_deg(app.station_lat, app.station_lon, app.station_alt,
+               << elevation_deg(station.lat, station.lon, station.alt,
                                  num_fields["lat"], num_fields["lon"], target_alt);
         } else {
             js << ",\"elevation_deg\":null";
@@ -1903,12 +1937,6 @@ int main(int argc, char **argv) {
         app.blacklist_file = resolve_config_path(app.base_dir, ini_value(ini_text, "blacklist_file"), "blacklist.txt");
         app.web_auth_user = ini_value(ini_text, "web_auth_user");
         app.web_auth_pass = ini_value(ini_text, "web_auth_password");
-        std::string lat_str = ini_value(ini_text, "lat");
-        std::string lon_str = ini_value(ini_text, "lon");
-        std::string alt_str = ini_value(ini_text, "alt");
-        try { if (!lat_str.empty()) app.station_lat = std::stod(lat_str); } catch (...) {}
-        try { if (!lon_str.empty()) app.station_lon = std::stod(lon_str); } catch (...) {}
-        try { if (!alt_str.empty()) app.station_alt = std::stod(alt_str); } catch (...) {}
     }
     app.spectrum_file = app.base_dir + "/data/spectrum_live.json";
     app.peaks_file = app.base_dir + "/data/scan_peaks.json";
