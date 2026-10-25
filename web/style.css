@@ -109,6 +109,20 @@ body {
   align-self: flex-end;
   padding-bottom: 5px;
 }
+.update-badge {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--btn-text);
+  background: #f86565;
+  padding: 2px 9px;
+  margin-left: 10px;
+  align-self: flex-end;
+  margin-bottom: 5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.update-badge:hover { filter: brightness(1.15); }
+.update-badge[hidden] { display: none; }
 .header-value { color: var(--header-value); }
 .hero-subtitle { color: var(--text); margin-bottom: 8px; }
 .path-row {

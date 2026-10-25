@@ -1688,14 +1688,48 @@ function initSpectrumTooltip() {
   });
 }
 
+const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/DO2JMG/wsrx/main/src/config.h';
+const UPDATE_REPO_URL = 'https://github.com/DO2JMG/wsrx';
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
+
+let localVersion = null;
+
+async function checkForUpdate() {
+  const el = document.getElementById('updateBadge');
+  if (!el || !localVersion) return;
+  try {
+    const r = await fetch(UPDATE_CHECK_URL, { cache: 'no-store' });
+    if (!r.ok) return;
+    const text = await r.text();
+    const m = text.match(/WSRX_VERSION\s*=\s*"([^"]+)"/);
+    if (!m) return;
+    const remoteVersion = m[1];
+    if (remoteVersion.trim() !== localVersion.trim()) {
+      el.href = UPDATE_REPO_URL;
+      el.textContent = 'Update available: v' + remoteVersion;
+      el.title = 'Installed: v' + localVersion + ' \u2013 new: v' + remoteVersion + '. Run ./update.sh to update.';
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  } catch (e) {
+    // No internet connection or GitHub unreachable - just don't show anything
+  }
+}
+
 async function loadVersion() {
   try {
     const v = await getJson('/api/version');
-    setText('appVersion', v && v.version ? ('v' + v.version) : '');
+    localVersion = v && v.version ? String(v.version) : null;
+    setText('appVersion', localVersion ? ('v' + localVersion) : '');
   } catch (e) {
+    localVersion = null;
     setText('appVersion', '');
   }
+  checkForUpdate();
 }
+
+setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
 
 initSpectrumTooltip();
 loadVersion();
