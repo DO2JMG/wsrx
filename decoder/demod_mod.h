@@ -27,7 +27,7 @@ typedef int   i32_t;
 
 
 typedef struct {
-    int sr;       // sample_rate
+    int sr;
     int LOG2N;
     int N;
     int N2;
@@ -37,24 +37,21 @@ typedef struct {
     float complex  *X;
     float complex  *Z;
     float complex  *cx;
-    float complex  *win; // float real
+    float complex  *win;
 } dft_t;
 
 
 typedef struct {
     FILE *fp;
-    //
-    int sr;       // sample_rate
-    int bps;      // bits/sample
-    int nch;      // channels
-    int ch;       // select channel
-    //
+    int sr;
+    int bps;
+    int nch;
+    int ch;
     int symlen;
     int symhd;
-    float sps;    // samples per symbol
-    float _spb;   // samples per bit
-    float br;     // baud rate
-    //
+    float sps;
+    float _spb;
+    float br;
     ui32_t sample_in;
     ui32_t sample_out;
     ui32_t delay;
@@ -67,10 +64,8 @@ typedef struct {
     float *bufs;
     float mv;
     ui32_t mv_pos;
-    //
     float mv2;
     ui32_t mv2_pos;
-    //
     int N_norm;
     int Nvar;
     float xsum;
@@ -78,37 +73,30 @@ typedef struct {
     float *xs;
     float *qs;
 
-    // IQ-data
     int opt_iq;
     int opt_iqdc;
     int N_IQBUF;
     float complex *rot_iqbuf;
     float complex F1sum;
     float complex F2sum;
-    //
     double complex iw1;
     double complex iw2;
 
 
-    //
     char *rawbits;
     char *hdr;
     int hdrlen;
 
-    //
-    float BT; // bw/time (ISI)
-    float h;  // modulation index
+    float BT;
+    float h;
 
-    // DFT
     dft_t DFT;
 
-    // dc offset
     int opt_dc;
     int locked;
     double dc;
     double Df;
     double dDf;
-    //
 
     ui32_t sample_posframe;
     ui32_t sample_posnoise;
@@ -117,8 +105,7 @@ typedef struct {
     double V_signal;
     double SNRdB;
 
-    // decimate
-    int opt_nolut; // default: LUT
+    int opt_nolut;
     int opt_IFmin;
     int decM;
     ui32_t sr_base;
@@ -128,22 +115,20 @@ typedef struct {
     ui32_t sample_decM;
     float complex *decXbuffer;
     float complex *decMbuf;
-    float complex *ex; // exp_lut
+    float complex *ex;
     double xlt_fq;
 
-    // IF: lowpass
     int opt_lp;
     int lpIQ_bw;
     float lpIQ_fbw;
-    int lpIQtaps; // ui32_t
+    int lpIQtaps;
     float *ws_lpIQ0;
     float *ws_lpIQ1;
     float *ws_lpIQ;
     float complex *lpIQ_buf;
 
-    // FM: lowpass
     int lpFM_bw;
-    int lpFMtaps; // ui32_t
+    int lpFMtaps;
     float *ws_lpFM;
     float *lpFM_buf;
     float *fm_buffer;
@@ -152,10 +137,10 @@ typedef struct {
 
 
 typedef struct {
-    int sr;       // sample_rate
-    int bps;      // bits_sample  bits/sample
-    int nch;      // channels
-    int sel_ch;   // select wav channel
+    int sr;
+    int bps;
+    int nch;
+    int sel_ch;
 } pcm_t;
 
 

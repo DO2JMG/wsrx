@@ -1,7 +1,3 @@
-/*
-    Partially ported from DF9DQ's ra-firmware
-    https://github.com/einergehtnochrein/ra-firmware
-*/
 
 #include <math.h>
 #include <stdint.h>
@@ -15,10 +11,7 @@
 #define S1_BAUD          2400u
 #define S1_FLEN          63
 #define S1_DATLEN        32
-#define S1_SYNCWORD      0x5552DUL
-#define S1_SYNCWORD_REV  0xAAAD2UL
 #define S1_CRC_POLY      0x8408u
-#define S1_LOWPASS_HZ    175.0
 
 static const uint8_t s1_whitening[64] = {
     0x0F,0x70,0xB3,0x6F,0x43,0x98,0x48,0xAE,
@@ -372,7 +365,17 @@ static int s1_process_frame(const uint8_t *rxbuf_whitened) {
         fprintf(stderr, "\n");
     }
     int crc_pos = -1;
-    if (!s1_crc_check(rxdat, S1_DATLEN - 1, &crc_pos)) return 0;
+    if (!s1_crc_check(rxdat, S1_DATLEN - 1, &crc_pos)) {
+        memcpy(rxdat, rxbuf_whitened, S1_DATLEN);
+        if (!s1_crc_check(rxdat, S1_DATLEN - 1, &crc_pos)) return 0;
+        golay_corrected = 0;
+        golay_failed = 0;
+        if (g_verbose || getenv("S1_DEBUG")) {
+            fprintf(stderr, "DEBUG uncoded frame rxdat:");
+            for (i = 0; i < S1_DATLEN; i++) fprintf(stderr, " %02X", rxdat[i]);
+            fprintf(stderr, "\n");
+        }
+    }
     if (g_verbose || getenv("S1_DEBUG")) {
         fprintf(stderr, "DEBUG crc matched at byte index %d (payload length ~%d bytes)\n", crc_pos, crc_pos + 3);
     }
@@ -398,7 +401,11 @@ static int s1_process_frame(const uint8_t *rxbuf_whitened) {
             uint32_t frame_number = 0;
             char idstr[32];
             char rawidstr[32];
-            if (p.alt_m != 0 && p.lat != 0 && p.lon != 0) {
+            if (!p.have_alt && p.have_pressure && p.pressure_hpa > 1.0f) {
+                p.alt_m = 44330.0f * (1.0f - powf(p.pressure_hpa / 1013.25f, 0.190263f));
+                p.have_alt = 1;
+            }
+            if (p.have_gps && p.lat != 0 && p.lon != 0) {
                 frame_number = g_frame_number++;
                 if (p.have_id) {
                     snprintf(idstr, sizeof(idstr), "WS%u", p.id);
@@ -425,9 +432,6 @@ static int s1_process_frame(const uint8_t *rxbuf_whitened) {
                 if (p.have_humidity)    printf(", \"humidity\": %.1f", p.humidity_percent);
                 if (p.have_pressure)    printf(", \"pressure\": %.2f", p.pressure_hpa);
                 if (p.have_vbat)        printf(", \"batt\": %.2f", p.vbat_v);
-                //if (p.have_lux)         printf(", \"lux_raw\": %u", p.lux_raw);
-                //if (p.history_count)    printf(", \"history_count\": %d", p.history_count);
-                //printf(", \"golay_corrected\": %d, \"golay_failed\": %d", p.golay_corrected, p.golay_failed);
                 if (g_tx_frequency_hz > 0.0) printf(", \"tx_frequency\": %.0f", g_tx_frequency_hz);
                 printf(", \"rawid\": \"%s\"", rawidstr);
                 printf(", \"subtype\": \"0\"");
@@ -472,117 +476,146 @@ static int s1_process_frame(const uint8_t *rxbuf_whitened) {
     }
     return 1;
 }
+
+#define S1_SYNC32       0x5555552DUL
+#define S1_SYNC32_INV   0xAAAAAAD2UL
+#define S1_FRAME_BITS   (S1_FLEN * 8)
+#define S1_MAX_SPS      256
+
 typedef struct {
-    uint32_t synword;
+    double sps;
+    int nphase;
+    uint32_t sr[S1_MAX_SPS];
+    long n;
+
+    int run_active;
+    long run_first, run_last;
+    int run_inverted;
+
     int in_frame;
-    int polarity;
-    int rxp;
-    int rxb;
+    int inverted;
+    double next_t;
+    int nbits;
+    uint8_t cur;
     uint8_t rxbuf[S1_FLEN];
-    int32_t baudfine;
-    int32_t demodbaud;
-    int cbit;
-    int plld, oldd;
-    int32_t pllshift;
-    float lastu;
-    float bitlev, noise;
-} S1_Receiver;
-static void s1_receiver_init(S1_Receiver *r, double sample_rate) {
+    float prev_x;
+    long last_zc;
+    int last_bit;
+
+    float *box;
+    int boxlen, boxpos;
+    float boxsum;
+} S1_Demod;
+
+static void s1_demod_init(S1_Demod *r, double sample_rate, double baud) {
     memset(r, 0, sizeof(*r));
-    r->in_frame = 0;
-    r->rxp = S1_FLEN;
-    r->pllshift = 1024;
-    r->demodbaud = (int32_t)((2.0 * S1_BAUD * 65536.0) / sample_rate);
+    r->sps = sample_rate / baud;
+    r->nphase = (int)lround(r->sps);
+    if (r->nphase < 4) r->nphase = 4;
+    if (r->nphase > S1_MAX_SPS) r->nphase = S1_MAX_SPS;
+    r->boxlen = (int)(r->sps / 2.0);
+    if (r->boxlen < 1) r->boxlen = 1;
+    r->box = (float *)calloc((size_t)r->boxlen, sizeof(float));
+    r->last_zc = -1;
 }
-static void s1_demod_byte(S1_Receiver *r, int d) {
-    r->synword = r->synword * 2u + (uint32_t)(d & 1);
-    if (r->rxp >= S1_FLEN) {
-        uint32_t w = r->synword & 0xFFFFFu;
-        if (w == S1_SYNCWORD) {
-            r->rxp = 0;
-            r->rxb = 0;
-        } else if (w == S1_SYNCWORD_REV) {
-            r->polarity = !r->polarity;
-            r->rxp = 0;
-            r->rxb = 0;
+
+static float s1_box(S1_Demod *r, float in) {
+    r->boxsum += in - r->box[r->boxpos];
+    r->box[r->boxpos] = in;
+    if (++r->boxpos >= r->boxlen) r->boxpos = 0;
+    return r->boxsum / (float)r->boxlen;
+}
+
+static void s1_frame_bit(S1_Demod *r, int bit) {
+    r->cur = (uint8_t)((r->cur << 1) | (bit & 1));
+    r->nbits++;
+    if ((r->nbits & 7) == 0) {
+        int idx = (r->nbits >> 3) - 1;
+        r->rxbuf[idx] = (uint8_t)(r->cur ^ s1_whitening[idx % 64]);
+        if (idx + 1 >= S1_FLEN) {
+            s1_process_frame(r->rxbuf);
+            r->in_frame = 0;
+            memset(r->sr, 0, sizeof(r->sr));
         }
-    } else {
-        r->rxb++;
-        if (r->rxb >= 8) {
-            r->rxb = 0;
-            r->rxbuf[r->rxp] = (uint8_t)(r->synword ^ s1_whitening[r->rxp % 64]);
-            r->rxp++;
-            if (r->rxp == S1_FLEN) {
-                s1_process_frame(r->rxbuf);
+    }
+}
+
+static void s1_demod_sample(S1_Demod *r, float raw) {
+    float x = s1_box(r, raw);
+    long n = r->n++;
+    int s = (x >= 0.0f);
+
+    if ((x >= 0.0f) != (r->prev_x >= 0.0f)) r->last_zc = n;
+    r->prev_x = x;
+
+    if (r->in_frame) {
+        if ((double)n + 0.5 >= r->next_t) {
+            int bit = s ^ r->inverted;
+            if (bit != r->last_bit && r->last_zc >= 0) {
+                double expected = r->next_t - r->sps / 2.0;
+                double err = (double)r->last_zc - expected;
+                if (fabs(err) < r->sps / 2.0) r->next_t += 0.1 * err;
             }
+            r->last_bit = bit;
+            r->next_t += r->sps;
+            s1_frame_bit(r, bit);
+        }
+        return;
+    }
+
+    int ph = (int)(n % r->nphase);
+    r->sr[ph] = (r->sr[ph] << 1) | (uint32_t)s;
+    uint32_t w = r->sr[ph];
+    int match = (w == S1_SYNC32) ? 1 : (w == S1_SYNC32_INV) ? 2 : 0;
+    if (match) {
+        if (!r->run_active) {
+            r->run_active = 1;
+            r->run_first = n;
+            r->run_inverted = (match == 2);
+        }
+        r->run_last = n;
+    } else if (r->run_active && n - r->run_last > 1) {
+        double centre = 0.5 * (double)(r->run_first + r->run_last);
+        r->run_active = 0;
+        r->in_frame = 1;
+        r->inverted = r->run_inverted;
+        r->next_t = centre + r->sps;
+        r->nbits = 0;
+        r->cur = 0;
+        r->last_bit = 1;
+        if (g_verbose || getenv("S1_DEBUG")) {
+            fprintf(stderr, "[t=%.2fs] sync%s phases=%ld\n", g_sample_seconds,
+                    r->inverted ? " (inverted)" : "", r->run_last - r->run_first + 1);
         }
     }
 }
 
-static void s1_demod_bit(S1_Receiver *r, float u, float u0) {
-    int d = (u >= u0);
-    s1_demod_byte(r, d == r->polarity);
-    float ua = fabsf(u - u0) - r->bitlev;
-    r->bitlev += ua * 0.005f;
-    r->noise  += (fabsf(ua) - r->noise) * 0.02f;
-}
-static void s1_feed_sample(S1_Receiver *r, float u) {
-    int d = (u >= 0.0f);
-    if (r->cbit) {
-        s1_demod_bit(r, u, r->lastu);
-        if (d != r->oldd) {
-            if (d == r->plld) r->baudfine += r->pllshift;
-            else               r->baudfine -= r->pllshift;
-            r->oldd = d;
-        }
-        r->lastu = u;
-    } else {
-        r->plld = d;
-    }
-    r->cbit = !r->cbit;
-}
-
-typedef struct {
-    float alpha;
-    float state;
-} LowPass;
-static void lowpass_init(LowPass *lp, double sample_rate, double cutoff_hz) {
-    double rc = 1.0 / (2.0 * M_PI * cutoff_hz);
-    double dt = 1.0 / sample_rate;
-    lp->alpha = (float)(dt / (rc + dt));
-    lp->state = 0.0f;
-}
-static float lowpass_step(LowPass *lp, float in) {
-    lp->state += lp->alpha * (in - lp->state);
-    return lp->state;
-}
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s [--samplerate HZ] [--iq] [--verbose] [--lowpass HZ] [--baud N] [--json] [--frequency HZ]\n"
-        "  --samplerate HZ   input sample rate (default 48000)\n"
+        "Usage: %s [--samplerate HZ] [--iq] [--verbose] [--baud N] [--json] [--frequency HZ]\n"
+        "  --samplerate HZ   input sample rate (default 48000, use >= 96000 for IQ)\n"
         "  --iq              input is interleaved I/Q int16 pairs instead\n"
-        "                    of mono FM-discriminated audio; a simple\n"
-        "                    delta-phase discriminator is applied first\n"
-        "  --lowpass HZ      post-discriminator low-pass cutoff (default 175)\n"
+        "                    of mono FM-discriminated audio\n"
         "  --baud N          assumed baud rate (default 2400)\n"
         "  --json            emit one wsrx-style JSON object per meteo frame\n"
         "                    on stdout, instead of the human-readable text\n"
         "  --frequency HZ    tx_frequency to embed in JSON output (optional)\n"
-        "  --verbose         print raw frame hex on every successful sync\n"
+        "  --verbose         print debug output on stderr\n"
+        "  --lowpass HZ      ignored (kept for compatibility)\n"
         "Reads 16-bit signed samples from stdin, writes decoded frames to\n"
         "stdout.\n",
         argv0);
 }
+
 int main(int argc, char **argv) {
     double sample_rate = 48000.0;
-    double lowpass_hz = S1_LOWPASS_HZ;
     double baud = S1_BAUD;
     int iq_mode = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--samplerate") == 0 && i + 1 < argc) {
             sample_rate = atof(argv[++i]);
         } else if (strcmp(argv[i], "--lowpass") == 0 && i + 1 < argc) {
-            lowpass_hz = atof(argv[++i]);
+            ++i;
         } else if (strcmp(argv[i], "--baud") == 0 && i + 1 < argc) {
             baud = atof(argv[++i]);
         } else if (strcmp(argv[i], "--iq") == 0) {
@@ -602,64 +635,34 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    S1_Receiver rx;
-    s1_receiver_init(&rx, sample_rate);
-    rx.demodbaud = (int32_t)((2.0 * baud * 65536.0) / sample_rate);
-    LowPass lp;
-    lowpass_init(&lp, sample_rate, lowpass_hz);
-    fprintf(stderr, "windsondmod: samplerate=%.0f iq=%d demodbaud_step=%d\n",
-            sample_rate, iq_mode, rx.demodbaud);
-    int16_t i_prev = 0, q_prev = 0;
-    int have_prev = 0;
-    float u_prev = 0.0f;
-    int have_u_prev = 0;
+    if (sample_rate / baud > S1_MAX_SPS) {
+        fprintf(stderr, "samplerate too high for baud rate (max %d samples/bit)\n", S1_MAX_SPS);
+        return 1;
+    }
+    S1_Demod rx;
+    s1_demod_init(&rx, sample_rate, baud);
+    fprintf(stderr, "windsondmod: samplerate=%.0f iq=%d sps=%.2f\n",
+            sample_rate, iq_mode, rx.sps);
+
     if (!iq_mode) {
         int16_t s;
         while (fread(&s, sizeof(s), 1, stdin) == 1) {
             g_sample_seconds += 1.0 / sample_rate;
-            float u_new = lowpass_step(&lp, (float)s / 32768.0f);
-            if (!have_u_prev) { u_prev = u_new; have_u_prev = 1; }
-            rx.baudfine += rx.demodbaud;
-            while (rx.baudfine >= 65536) {
-                int32_t overflow = rx.baudfine - 65536;
-                rx.baudfine -= 65536;
-                float frac = 1.0f - (float)overflow / (float)rx.demodbaud;
-                if (frac < 0.0f) frac = 0.0f;
-                if (frac > 1.0f) frac = 1.0f;
-                float u_interp = u_prev + frac * (u_new - u_prev);
-                s1_feed_sample(&rx, u_interp);
-            }
-            u_prev = u_new;
+            s1_demod_sample(&rx, (float)s / 32768.0f);
         }
     } else {
         int16_t iq[2];
+        float i_prev = 0.0f, q_prev = 0.0f;
         while (fread(iq, sizeof(int16_t), 2, stdin) == 2) {
             g_sample_seconds += 1.0 / sample_rate;
-            int16_t i_s = iq[0], q_s = iq[1];
-            float disc = 0.0f;
-            if (have_prev) {
-                float re = (float)i_s * i_prev + (float)q_s * q_prev;
-                float im = (float)q_s * i_prev - (float)i_s * q_prev;
-                disc = atan2f(im, re);
-            }
+            float i_s = iq[0], q_s = iq[1];
+            float re = i_s * i_prev + q_s * q_prev;
+            float im = q_s * i_prev - i_s * q_prev;
             i_prev = i_s;
             q_prev = q_s;
-            have_prev = 1;
-            float u_new = lowpass_step(&lp, disc);
-            if (!have_u_prev) { u_prev = u_new; have_u_prev = 1; }
-            rx.baudfine += rx.demodbaud;
-            while (rx.baudfine >= 65536) {
-                int32_t overflow = rx.baudfine - 65536;
-                rx.baudfine -= 65536;
-                float frac = 1.0f - (float)overflow / (float)rx.demodbaud;
-                if (frac < 0.0f) frac = 0.0f;
-                if (frac > 1.0f) frac = 1.0f;
-                float u_interp = u_prev + frac * (u_new - u_prev);
-                s1_feed_sample(&rx, u_interp);
-            }
-            u_prev = u_new;
+            s1_demod_sample(&rx, atan2f(im, re));
         }
     }
-
+    free(rx.box);
     return 0;
 }

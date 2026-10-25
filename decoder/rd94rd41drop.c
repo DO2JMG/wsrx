@@ -1,9 +1,4 @@
 
-/*
-  dropsonde RD94/RD41
-  frames,position: 2Hz
-  velocity(wind): 4Hz
-*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,19 +6,13 @@
 #include <math.h>
 
 #ifdef CYGWIN
-  #include <fcntl.h>  // cygwin: _setmode()
+  #include <fcntl.h>
   #include <io.h>
 #endif
 
-// optional JSON "version"
-//  (a) set global
-//      gcc -DVERSION_JSN [-I<inc_dir>] ...
 #ifdef VERSION_JSN
   #include "version_jsn.h"
 #endif
-// or
-//  (b) set local compiler option, e.g.
-//      gcc -DVER_JSN_STR=\"0.0.2\" ...
 
 
 typedef unsigned char  ui8_t;
@@ -32,30 +21,30 @@ typedef unsigned int   ui32_t;
 typedef signed   char  i8_t;
 
 typedef struct {
-    i8_t vbs;  // verbose output
-    i8_t raw;  // raw frames
-    i8_t ptu;  // PTU: temperature
+    i8_t vbs;
+    i8_t raw;
+    i8_t ptu;
     i8_t inv;
     i8_t aut;
-    i8_t jsn;  // JSON output (auto_rx)
+    i8_t jsn;
 } option_t;
 
 
 #define RD41 41
 #define RD94 94
 
-#define BITS (1+8+1)  // 8N1 = 10bit/byte
+#define BITS (1+8+1)
 
 #define HEADLEN (40)
 #define HEADOFS (40)
 
 static char header[] =
-"10100110010110101001"   // 0x1A = 0 01011000 1
-"10010101011010010101"   // 0xCF = 0 11110011 1
-"10101001010101010101"   // 0xFC = 0 00111111 1
-"10011001010110101001";  // 0x1D = 0 10111000 1
+"10100110010110101001"
+"10010101011010010101"
+"10101001010101010101"
+"10011001010110101001";
 
-#define       FRAME_LEN  120  // 240/sec -> 120/frame
+#define       FRAME_LEN  120
 #define    BITFRAME_LEN (FRAME_LEN*BITS)
 #define RAWBITFRAME_LEN (FRAME_LEN*BITS*2)
 
@@ -68,7 +57,6 @@ typedef struct {
     int std; int min; int sek; int ms; int cs;
     double lat; double lon;
     double alt;
-    //
     double   X; double   Y; double   Z;
     double pAcc;
     double vX1; double vY1; double vZ1;
@@ -76,13 +64,11 @@ typedef struct {
     int sats;
     double vN; double vE; double vU;
     double vH; double vD; double vV;
-    //
     double vX2; double vY2; double vZ2;
     double sAcc2;
     int sats2;
     double alt2;
     double vH2; double vD2; double vV2;
-    //
     double P; double T; double U1; double U2;
     double bat; double iT;
 
@@ -92,25 +78,22 @@ typedef struct {
     ui8_t frame_bytes[FRAME_LEN+10];
 
     option_t option;
-    int jsn_freq;   // freq/kHz (SDR)
+    int jsn_freq;
     int auto_type;
 
 } gpx_t;
 
-/* ------------------------------------------------------------------------------------ */
 
 static char buf[HEADLEN+1] = "x";
 static int bufpos = -1;
 
-#define BAUD_RATE 4800  //(4798.8) //4800
+#define BAUD_RATE 4800
 
 static int sample_rate = 0, bits_sample = 0, channels = 0;
 static float samples_per_bit = 0;
 
-// --- IQ front-end (added for wsrx: raw complex IQ input like rs41mod,
-// instead of requiring pre-demodulated FM audio) ---
-static int option_iq = 0;          // 1 = read complex I/Q pairs, FM-discriminate internally
-static double iq_xlt_fq = 0.0;     // optional baseband rotation, -0.5 .. 0.5 (fraction of sample_rate)
+static int option_iq = 0;
+static double iq_xlt_fq = 0.0;
 static double iq_mixer_phase = 0.0;
 static double iq_prev_i = 0.0, iq_prev_q = 0.0;
 static int iq_have_prev = 0;
@@ -131,10 +114,8 @@ static int read_wav_header(FILE *fp) {
     if (fread(txt, 1, 4, fp) < 4) return -1;
     if (strncmp(txt, "RIFF", 4)) return -1;
     if (fread(txt, 1, 4, fp) < 4) return -1;
-    // pos_WAVE = 8L
     if (fread(txt, 1, 4, fp) < 4) return -1;
     if (strncmp(txt, "WAVE", 4)) return -1;
-    // pos_fmt = 12L
     for ( ; ; ) {
         if ( (byte=fgetc(fp)) == EOF ) return -1;
         txt[p % 4] = byte;
@@ -148,16 +129,14 @@ static int read_wav_header(FILE *fp) {
     channels = dat[0] + (dat[1] << 8);
 
     if (fread(dat, 1, 4, fp) < 4) return -1;
-    memcpy(&sample_rate, dat, 4); //sample_rate = dat[0]|(dat[1]<<8)|(dat[2]<<16)|(dat[3]<<24);
+    memcpy(&sample_rate, dat, 4);
 
     if (fread(dat, 1, 4, fp) < 4) return -1;
     if (fread(dat, 1, 2, fp) < 2) return -1;
-    //byte = dat[0] + (dat[1] << 8);
 
     if (fread(dat, 1, 2, fp) < 2) return -1;
     bits_sample = dat[0] + (dat[1] << 8);
 
-    // pos_dat = 36L + info
     for ( ; ; ) {
         if ( (byte=fgetc(fp)) == EOF ) return -1;
         txt[p % 4] = byte;
@@ -184,7 +163,6 @@ static int read_wav_header(FILE *fp) {
 
 static unsigned long sample_count = 0;
 
-// Reads one interleaved 16-bit signed channel sample (I or Q).
 static int read_raw_channel16(FILE *fp, double *out) {
     int b0 = fgetc(fp);
     if (b0 == EOF) return EOF;
@@ -195,12 +173,6 @@ static int read_raw_channel16(FILE *fp, double *out) {
     return 0;
 }
 
-// Reads one complex I/Q sample pair, applies the optional baseband rotation
-// (same convention as rs41mod's --IQ <fq>: S(t) -> S(t)*exp(-j*2*pi*fq*t)),
-// then FM-discriminates against the previous sample (phase difference).
-// This turns raw complex IQ into the same kind of signed "audio-like" value
-// read_signed_sample() would get from real FM-demodulated audio, so the
-// existing zero-crossing bit-slicer below needs no further changes.
 static int read_signed_sample_iq(FILE *fp) {
     double i_val, q_val, ri, rq, disc;
     const double two_pi = 2.0 * 3.14159265358979323846;
@@ -238,13 +210,12 @@ static int read_signed_sample_iq(FILE *fp) {
     return (int)(disc * (10000.0 / 3.14159265358979323846));
 }
 
-static int read_signed_sample(FILE *fp) {  // int = i32_t
-    int byte, i, sample, s=0;              //  EOF -> 0x1000000
+static int read_signed_sample(FILE *fp) {
+    int byte, i, sample, s=0;
 
     if (option_iq) return read_signed_sample_iq(fp);
 
     for (i = 0; i < channels; i++) {
-                           // i = 0: links bzw. mono
         byte = fgetc(fp);
         if (byte == EOF) return EOF_INT;
         if (i == 0) sample = byte;
@@ -257,7 +228,7 @@ static int read_signed_sample(FILE *fp) {  // int = i32_t
 
     }
 
-    if (bits_sample ==  8) s = sample-128;   // 8bit: 00..FF, centerpoint 0x80=128
+    if (bits_sample ==  8) s = sample-128;
     if (bits_sample == 16) s = (short)sample;
 
     sample_count++;
@@ -279,24 +250,22 @@ static int read_bits_fsk(gpx_t *gpx, FILE *fp, int *bit, int *len) {
         y0 = sample;
         sample = read_signed_sample(fp);
         if (sample == EOF_INT) return EOF;
-        //sample_count++; // in read_signed_sample()
         par_alt = par;
-        par =  (sample >= 0) ? 1 : -1;    // 8bit: 0..127,128..255 (-128..-1,0..127)
+        par =  (sample >= 0) ? 1 : -1;
         n++;
     } while (par*par_alt > 0);
 
     if (!option_res) l = (float)n / samples_per_bit;
-    else {                                 // genauere Bitlaengen-Messung
-        x1 = sample/(float)(sample-y0);    // hilft bei niedriger sample rate
-        l = (n+x0-x1) / samples_per_bit;   // meist mehr frames (nicht immer)
+    else {
+        x1 = sample/(float)(sample-y0);
+        l = (n+x0-x1) / samples_per_bit;
         x0 = x1;
     }
 
     *len = (int)(l+0.5);
 
-    if (!gpx->option.inv) *bit = (1+par_alt)/2;  // oben 1, unten -1
-    else                  *bit = (1-par_alt)/2;  // sdr#<rev1381?, invers: unten 1, oben -1
-// *bit = (1+inv*par_alt)/2; // ausser inv=0
+    if (!gpx->option.inv) *bit = (1+par_alt)/2;
+    else                  *bit = (1-par_alt)/2;
 
     return 0;
 }
@@ -311,7 +280,7 @@ static int read_rawbit(gpx_t *gpx, FILE *fp, int *bit) {
     n = 0;
 
     if (bitstart) {
-        n = 1;    // d.h. bitgrenze = sample_count-1 (?)
+        n = 1;
         bitgrenze = sample_count-1;
         bitstart = 0;
     }
@@ -320,11 +289,9 @@ static int read_rawbit(gpx_t *gpx, FILE *fp, int *bit) {
     do {
         sample = read_signed_sample(fp);
         if (sample == EOF_INT) return EOF;
-        //sample_count++; // in read_signed_sample()
-        //par =  (sample >= 0) ? 1 : -1;    // 8bit: 0..127,128..255 (-128..-1,0..127)
         sum += sample;
         n++;
-    } while (sample_count < bitgrenze);  // n < samples_per_bit
+    } while (sample_count < bitgrenze);
 
     if (sum >= 0) *bit = 1;
     else          *bit = 0;
@@ -356,7 +323,6 @@ static int f32soft_read(FILE *fp, float *s, int inv) {
     return 0;
 }
 
-/* ------------------------------------------------------------------------------------ */
 
 static void inc_bufpos() {
   bufpos = (bufpos+1) % HEADLEN;
@@ -374,25 +340,11 @@ static int compare() {
         i++;
     }
     if (i == HEADLEN) return 1;
-/*
-    i = 0;
-    j = bufpos;
-    while (i < HEADLEN) {
-        if (j < 0) j = HEADLEN-1;
-        if (buf[j] != cb_inv(header[HEADOFS+HEADLEN-1-i])) break;
-        j--;
-        i++;
-    }
-    if (i == HEADLEN) return -1;
-*/
     return 0;
 
 }
 
-/* ------------------------------------------------------------------------------------ */
 
-// manchester1 1->10,0->01: 1.bit
-// manchester2 0->10,1->01: 2.bit
 static void manchester2(char* frame_rawbits, char *frame_bits) {
     int i;
     char bit, bits[2];
@@ -421,10 +373,9 @@ static int bits2bytes(char *bitstr, ui8_t *bytes) {
         byteval = 0;
         d = 1;
         for (i = 1; i < BITS-1; i++) {
-            bit=*(bitstr+bitpos+i); /* little endian */
-            //bit=*(bitstr+bitpos+BITS-1-i);  /* big endian */
+            bit=*(bitstr+bitpos+i);
             if         (bit == '1')     byteval += d;
-            else /*if ((bit == '0') */  byteval += 0;
+            else    byteval += 0;
             d <<= 1;
         }
         bitpos += BITS;
@@ -432,20 +383,11 @@ static int bits2bytes(char *bitstr, ui8_t *bytes) {
 
     }
 
-    //while (bytepos < FRAME_LEN) bytes[bytepos++] = 0;
 
     return 0;
 }
 
 
-/* ------------------------------------------------------------------------------------ */
-/*
- * Convert GPS Week and Seconds to Modified Julian Day.
- * - Adapted from sci.astro FAQ.
- * - Ignores UTC leap seconds.
- */
-//// in : week, gpssec
-// out: jahr, monat, tag
 static void Gps2Date(gpx_t *gpx) {
     long GpsDays, Mjd;
     long J, C, Y, M;
@@ -465,55 +407,48 @@ static void Gps2Date(gpx_t *gpx) {
     gpx->jahr = 100 * (C - 49) + Y + J;
 }
 
-/* ------------------------------------------------------------------------------------ */
 
 
-#define OFS             (0x02)        // HEADLEN/(2*BITS)
-#define pos_FrameNb     (OFS+0x01)    // 2 byte
-// PTUsensors
-#define pos_sensorP     (OFS+0x05)    // 4 byte float32
-#define pos_sensorT     (OFS+0x09)    // 4 byte float32
-#define pos_sensorU1    (OFS+0x0D)    // 4 byte float32
-#define pos_sensorU2    (OFS+0x11)    // 4 byte float32
-// ublox5 NAV-SOL
-#define pos_GPSTOW      (OFS+0x18)    // iTow 4 byte (+ fTOW? 4 byte)
-#define pos_GPSweek     (OFS+0x20)    // 2 byte
-#define pos_GPSecefX    (OFS+0x24)    // 4 byte
-#define pos_GPSecefY    (OFS+0x28)    // 4 byte
-#define pos_GPSecefZ    (OFS+0x2C)    // 4 byte
-#define pos_GPSpAcc     (OFS+0x30)    // 4 byte
-#define pos_GPSecefV1   (OFS+0x34)    // 3*4 byte
-#define pos_GPSsAcc1    (OFS+0x40)    // 4 byte
-#define pos_GPSsats1    (OFS+0x46)    // 1 byte
-#define pos_GPSecefV2   (OFS+0x4A)    // 3*4 byte
-#define pos_GPSsAcc2    (OFS+0x56)    // 4 byte
-#define pos_GPSsats2    (OFS+0x5A)    // 1 byte
-// internal
-#define pos94_ID        (OFS+0x5D)    // 4 byte
-#define pos94_rev       (OFS+0x61)    // 2 byte char? // e.g. "A5"
-#define pos94_bat       (OFS+0x66)    // 2 byte
-#define pos94_sensorTi  (OFS+0x68)    // 4 byte float32
-// checksums
-#define pos_chkFrNb     (pos_FrameNb-1   +  3)  // 16 bit
-#define pos_chkPTU      (pos_sensorP     + 17)  // 16 bit
-#define pos_chkGPS1     (pos_GPSTOW      + 47)  // 16 bit
-#define pos_chkGPS2     (pos_GPSecefV2-1 + 18)  // 16 bit
-#define pos_chkInt      (pos94_ID        + 21)  // 16 bit
+#define OFS             (0x02)
+#define pos_FrameNb     (OFS+0x01)
+#define pos_sensorP     (OFS+0x05)
+#define pos_sensorT     (OFS+0x09)
+#define pos_sensorU1    (OFS+0x0D)
+#define pos_sensorU2    (OFS+0x11)
+#define pos_GPSTOW      (OFS+0x18)
+#define pos_GPSweek     (OFS+0x20)
+#define pos_GPSecefX    (OFS+0x24)
+#define pos_GPSecefY    (OFS+0x28)
+#define pos_GPSecefZ    (OFS+0x2C)
+#define pos_GPSpAcc     (OFS+0x30)
+#define pos_GPSecefV1   (OFS+0x34)
+#define pos_GPSsAcc1    (OFS+0x40)
+#define pos_GPSsats1    (OFS+0x46)
+#define pos_GPSecefV2   (OFS+0x4A)
+#define pos_GPSsAcc2    (OFS+0x56)
+#define pos_GPSsats2    (OFS+0x5A)
+#define pos94_ID        (OFS+0x5D)
+#define pos94_rev       (OFS+0x61)
+#define pos94_bat       (OFS+0x66)
+#define pos94_sensorTi  (OFS+0x68)
+#define pos_chkFrNb     (pos_FrameNb-1   +  3)
+#define pos_chkPTU      (pos_sensorP     + 17)
+#define pos_chkGPS1     (pos_GPSTOW      + 47)
+#define pos_chkGPS2     (pos_GPSecefV2-1 + 18)
+#define pos_chkInt      (pos94_ID        + 21)
 
-//
-#define pos_pckFrm      (OFS+0x00)    //  3 bytes
-#define pos_pckPTU      (OFS+0x05)    // 16 bytes (RD41) / 17 bytes (RD94)
-#define pos_CCC         (OFS+0x17)    // 17 bytes
-#define pos_DDD         (OFS+0x2A)    // 12 bytes
-#define pos_EEE         (OFS+0x38)    // 13 bytes
-#define pos_FFF         (OFS+0x47)    // 27 bytes (0x0A0A0A0A...)
-#define pos_pckIDint    (OFS+0x64)    // 14 bytes
+#define pos_pckFrm      (OFS+0x00)
+#define pos_pckPTU      (OFS+0x05)
+#define pos_CCC         (OFS+0x17)
+#define pos_DDD         (OFS+0x2A)
+#define pos_EEE         (OFS+0x38)
+#define pos_FFF         (OFS+0x47)
+#define pos_pckIDint    (OFS+0x64)
 
-// internal
-#define pos41_ID        (pos_pckIDint    ) //(OFS+0x64)   // 4 byte
-#define pos41_bat       (pos_pckIDint+0x6) //(OFS+0x6A)   // 2 byte
-#define pos41_sensorTi  (pos_pckIDint+0x8) //(OFS+0x6C)   // 4 byte float32
-#define pos41_rev       (pos_pckIDint+0xC) //(OFS+0x70)   // 2 byte char? // e.g. "A5"
+#define pos41_ID        (pos_pckIDint    )
+#define pos41_bat       (pos_pckIDint+0x6)
+#define pos41_sensorTi  (pos_pckIDint+0x8)
+#define pos41_rev       (pos_pckIDint+0xC)
 
 
 static unsigned chksum16(ui8_t *bytes, int len) {
@@ -524,7 +459,6 @@ static unsigned chksum16(ui8_t *bytes, int len) {
         sum1 = (sum1 + bytes[i]) % 0x100;
         sum2 = (sum2 + sum1) % 0x100;
     }
-    //return sum1 | (sum2<<8);
     return sum2 | (sum1<<8);
 }
 
@@ -555,7 +489,7 @@ static int get_ID(gpx_t *gpx) {
     int pos_ID = (gpx->type == RD41) ? pos41_ID : pos94_ID;
 
     byte = 0;
-    for (i = 0; i < 4; i++) {              // big endian
+    for (i = 0; i < 4; i++) {
         byte |= gpx->frame_bytes[pos_ID + i] << (24-8*i);
     }
     gpx->id = byte;
@@ -599,7 +533,7 @@ static char weekday[7][4] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 static int get_GPStime_rd94(gpx_t *gpx) {
     int i;
     ui8_t gpstime_bytes[4];
-    int gpstime = 0, // 32bit
+    int gpstime = 0,
         day;
 
     for (i = 0; i < 4; i++) {
@@ -657,7 +591,7 @@ static void ecef2elli(double X[], double *lat, double *lon, double *alt) {
 static int get_GPSkoord_rd94(gpx_t *gpx) {
     int i, k;
     ui8_t XYZ_bytes[4];
-    int XYZ; // 32bit
+    int XYZ;
     double X[3], lat, lon, alt;
 
     for (k = 0; k < 3; k++) {
@@ -668,7 +602,6 @@ static int get_GPSkoord_rd94(gpx_t *gpx) {
         X[k] = XYZ / 100.0;
     }
 
-    // ECEF-Position
     ecef2elli(X, &lat, &lon, &alt);
     gpx->lat = lat;
     gpx->lon = lon;
@@ -691,7 +624,7 @@ static int get_GPSkoord_rd94(gpx_t *gpx) {
 static int get_GPSvel_rd94(gpx_t *gpx) {
     int i, k;
     ui8_t XYZ_bytes[4];
-    int XYZ; // 32bit
+    int XYZ;
     double V[3];
     double phi, lam, dir;
 
@@ -777,32 +710,27 @@ static int get_GPSlatlon_rd41(gpx_t *gpx) {
 }
 
 static int get_GPSvelalt_rd41(gpx_t *gpx) {
-    short vH1, _D1, _V1; // 16bit
-    short vH2, _D2, _V2; // 16bit
-    int alt1_i3; // 24bit
-    int alt2_i3; // 24bit
+    short vH1, _D1, _V1;
+    short vH2, _D2, _V2;
+    int alt1_i3;
+    int alt2_i3;
     double dir;
 
-    // vel1
     vH1 = (gpx->frame_bytes[pos_CCC + 0] << 8) | gpx->frame_bytes[pos_CCC + 1];
     _D1 = (gpx->frame_bytes[pos_CCC + 2] << 8) | gpx->frame_bytes[pos_CCC + 3];
     _V1 = (gpx->frame_bytes[pos_CCC + 4] << 8) | gpx->frame_bytes[pos_CCC + 5];
 
-    // alt1
     alt1_i3 = (gpx->frame_bytes[pos_CCC+6+ 0]<<16) | (gpx->frame_bytes[pos_CCC+6+ 1]<<8) |
                gpx->frame_bytes[pos_CCC+6+ 2];
     if (alt1_i3 & 0x800000) alt1_i3 -= 0x1000000;
 
-    // pos_CCC+9 .. posCCC+12: time
 
     gpx->sats = gpx->frame_bytes[pos_CCC+13];
 
-    //vel2
     vH2 = (gpx->frame_bytes[pos_EEE + 0] << 8) | gpx->frame_bytes[pos_EEE + 1];
     _D2 = (gpx->frame_bytes[pos_EEE + 2] << 8) | gpx->frame_bytes[pos_EEE + 3];
     _V2 = (gpx->frame_bytes[pos_EEE + 4] << 8) | gpx->frame_bytes[pos_EEE + 5];
 
-    // alt2
     alt2_i3 = (gpx->frame_bytes[pos_EEE+6+ 0]<<16) | (gpx->frame_bytes[pos_EEE+6+ 1]<<8) |
                gpx->frame_bytes[pos_EEE+6+ 2];
     if (alt2_i3 & 0x800000) alt2_i3 -= 0x1000000;
@@ -826,26 +754,12 @@ static float float32_rd94(ui8_t *b) {
     int i;
     unsigned num, val;
     float f;
-    // double e, s, m;
 
     num = 0;
     for (i=0;i<4;i++) { num |= b[i] << (24-8*i); }
-/*
-    val = 0;
-    for (i=31;i>=24;i--) { val |= ((num>>i)&1)<<(i-24); }
-    e = (double)val-127;  // exponent
-
-    val = 0;
-    for (i=22;i>= 0;i--) { val |= ((num>>i)&1)<<i; }
-    m = (double)val/(1<<23);  // mantissa
-
-    s = (num>>23)&1 ? -1.0 : +1.0 ;  // sign
-
-    f = s*(1+m)*pow(2,e);
-*/
-    val  = (num     &   0x800000)<<8;  // sign
-    val |= (num>>1) & 0x7F800000;      // exponent
-    val |=  num     &   0x7FFFFF;      // mantissa
+    val  = (num     &   0x800000)<<8;
+    val |= (num>>1) & 0x7F800000;
+    val |=  num     &   0x7FFFFF;
 
     memcpy(&f, &val, 4);
 
@@ -892,13 +806,12 @@ static int get_Sensors2(gpx_t *gpx) {
     return 0;
 }
 
-static int getBlock_FrNb(gpx_t *gpx) {  // block 0: frame counter
+static int getBlock_FrNb(gpx_t *gpx) {
     unsigned bytes;
     unsigned check;
     int err = 0;
     unsigned (*fchkp)(ui8_t *, int) = (gpx->type == RD41) ? crc16 : chksum16;
 
-     // header (next frame)
     if ( gpx->frame_bytes[OFS+116] != 0x1A ) {
         err |= (0x1 << 7);
     }
@@ -915,7 +828,7 @@ static int getBlock_FrNb(gpx_t *gpx) {  // block 0: frame counter
     return err;
 }
 
-static int getBlock_PTU(gpx_t *gpx) {  // block 1: sensors P, T, U1, U2
+static int getBlock_PTU(gpx_t *gpx) {
     unsigned bytes;
     unsigned check;
     int err = 0;
@@ -931,7 +844,7 @@ static int getBlock_PTU(gpx_t *gpx) {  // block 1: sensors P, T, U1, U2
     return err;
 }
 
-static int getBlock_GPS_rd94(gpx_t *gpx) {  // block 2,3: GPS pos+vel1, vel2
+static int getBlock_GPS_rd94(gpx_t *gpx) {
     unsigned bytes;
     unsigned check;
     int err = 0, err_gps = 0;
@@ -952,7 +865,7 @@ static int getBlock_GPS_rd94(gpx_t *gpx) {  // block 2,3: GPS pos+vel1, vel2
     return err | (err_gps<<8);
 }
 
-static int getBlock_GPS_rd41(gpx_t *gpx) {  // block 2,3,4: GPS vel1+alt1+time, pos, vel2+alt2
+static int getBlock_GPS_rd41(gpx_t *gpx) {
     unsigned bytes;
     unsigned check;
     int err = 0, err_gps = 0;
@@ -977,20 +890,20 @@ static int getBlock_GPS_rd41(gpx_t *gpx) {  // block 2,3,4: GPS vel1+alt1+time, 
     err_gps |= get_GPSlatlon_rd41(gpx);
     err_gps |= get_GPSvelalt_rd41(gpx);
 
-    return err;  // | (err<<8);
+    return err;
 }
 
-static int getBlock_GPS(gpx_t *gpx) {  // block 2,3: GPS pos+vel1, vel2
+static int getBlock_GPS(gpx_t *gpx) {
     int ret = (gpx->type == RD41) ? getBlock_GPS_rd41(gpx) : getBlock_GPS_rd94(gpx);
     return ret;
 }
 
-static int getBlock_Int(gpx_t *gpx) {  // block 4/6: SondeID, internalTemp, battery
+static int getBlock_Int(gpx_t *gpx) {
     unsigned bytes;
     unsigned check;
     int err = 0;
     unsigned (*fchkp)(ui8_t *, int) = (gpx->type == RD41) ? crc16 : chksum16;
-    int pos = (gpx->type == RD41) ? pos_pckIDint : pos_chkInt-21;  // pos_chkInt-21 = pos94_ID
+    int pos = (gpx->type == RD41) ? pos_pckIDint : pos_chkInt-21;
     int len = (gpx->type == RD41) ? 14 : 21;
 
     check = fchkp(gpx->frame_bytes+pos, len);
@@ -1002,7 +915,6 @@ static int getBlock_Int(gpx_t *gpx) {  // block 4/6: SondeID, internalTemp, batt
 
     get_ID(gpx);
 
-    //if (gpx->option.vbs)
     get_Sensors2(gpx);
 
     return err;
@@ -1101,33 +1013,31 @@ static void print_frame(gpx_t *gpx) {
             }
         }
     }
-    //DBG:
-    //fprintf(stderr, "rd94:%04X # rd41:%04X ## RD%d\n", err_rd94, err_rd41, gpx->type);
 
     if (gpx->option.raw) {
         for (i = 0; i < FRAME_LEN; i++) {
             fprintf(stdout, "%02x", gpx->frame_bytes[i]);
             if (gpx->option.raw == 2) {
-                if (gpx->type == RD94) // RD94
+                if (gpx->type == RD94)
                 {
                     if ( i==OFS-1
-                        || i==OFS+0  || i==OFS+2                            // frame-counter
-                        || i==OFS+4  || i==OFS+8 || i==OFS+12 || i==OFS+16  // sensors (P,T,U1,U2)
+                        || i==OFS+0  || i==OFS+2
+                        || i==OFS+4  || i==OFS+8 || i==OFS+12 || i==OFS+16
                         || i==OFS+20 || i==OFS+21
-                        || i==OFS+23 || i==OFS+27                           // TOW
-                        || i==OFS+31 || i==OFS+33                           // week
-                        || i==OFS+35 || i==OFS+39 || i==OFS+43              // ECEF-pos
+                        || i==OFS+23 || i==OFS+27
+                        || i==OFS+31 || i==OFS+33
+                        || i==OFS+35 || i==OFS+39 || i==OFS+43
                         || i==OFS+47
-                        || i==OFS+51 || i==OFS+55 || i==OFS+59              // ECEF-vel1
+                        || i==OFS+51 || i==OFS+55 || i==OFS+59
                         || i==OFS+63 || i==OFS+67
-                        || i==OFS+69 || i==OFS+70                           // sats-1
+                        || i==OFS+69 || i==OFS+70
                         || i==OFS+72
-                        || i==OFS+73 || i==OFS+77 || i==OFS+81              // ECEF-vel2
+                        || i==OFS+73 || i==OFS+77 || i==OFS+81
                         || i==OFS+85
-                        || i==OFS+89 || i==OFS+90                           // sats-2
-                        || i==OFS+92 || i==OFS+96 || i==OFS+98              // SondeID, Rev?
-                        || i==OFS+101                                       // bat
-                        || i==OFS+103 || i==OFS+107                         // internT
+                        || i==OFS+89 || i==OFS+90
+                        || i==OFS+92 || i==OFS+96 || i==OFS+98
+                        || i==OFS+101
+                        || i==OFS+103 || i==OFS+107
                         || i==OFS+113 || i==OFS+115
                         ) fprintf(stdout, " ");
                     if ( i==pos_chkFrNb -4  )  fprintf(stdout, " ");
@@ -1166,11 +1076,11 @@ static void print_frame(gpx_t *gpx) {
 
         if (gpx->option.raw == 2) {
             fprintf(stdout, "  # chk: ");
-            if (gpx->type == RD94) {  // blocks: 0=F, 1=S, 2=G1, 3=G2, 4=I
+            if (gpx->type == RD94) {
                 for (i = 0; i < 5; i++) fprintf(stdout, "%d", (err_rd94>>i)&1);
             }
             else
-            if (gpx->type == RD41) {  // blocks: 0=F, 1=S, 2=G1, 3=G2, 4=G3, 5=A, 6=I
+            if (gpx->type == RD41) {
                 for (i = 0; i < 7; i++) fprintf(stdout, "%d", (err_rd41>>i)&1);
             }
         }
@@ -1197,7 +1107,6 @@ static void print_frame(gpx_t *gpx) {
             fprintf(stdout, " lon: %.5f° ", gpx->lon);
             fprintf(stdout, " alt: %.2fm ", gpx->alt);
             if (gpx->option.vbs == 2) {
-                //fprintf(stdout," (%7.2f,%7.2f,%7.2f) ", gpx->X, gpx->Y, gpx->Z);
                 fprintf(stdout, " (E:%.2fm) ", gpx->pAcc);
             }
             if (gpx->option.vbs) {
@@ -1229,15 +1138,14 @@ static void print_frame(gpx_t *gpx) {
                 fprintf(stdout, " Bat=%.2fV ", gpx->bat);
             }
 
-            fprintf(stdout, "  # chk: ");  // blocks: 0=F, 1=S, 2=G1, 3=G2, 4=I
+            fprintf(stdout, "  # chk: ");
             for (i = 0; i < 5; i++) fprintf(stdout, "%d", (err_rd94>>i)&1);
 
-            fprintf(stdout, "\n");  // fflush(stdout);
+            fprintf(stdout, "\n");
         }
         else if (gpx->type == RD41 && !(err_rd41 & 0x4F) )
         {
             fprintf(stdout, "[%5d] ", gpx->frnr);
-            //fprintf(stdout, " %04d-%02d-%02d", gpx->jahr, gpx->monat, gpx->tag);
             fprintf(stdout, " %02d:%02d:%02d.%02d",  gpx->std, gpx->min, gpx->sek, gpx->cs);
             fprintf(stdout, "  ");
             fprintf(stdout, " lat: %.5f° ", gpx->lat);
@@ -1267,20 +1175,17 @@ static void print_frame(gpx_t *gpx) {
                 fprintf(stdout, " Bat=%.2fV ", gpx->bat);
             }
 
-            fprintf(stdout, "  # chk: ");  // blocks: 0=F, 1=S, 2=G1, 3=G2, 4=G3, 5=A, 6=I
+            fprintf(stdout, "  # chk: ");
             for (i = 0; i < 7; i++) fprintf(stdout, "%d", (err_rd41>>i)&1);
 
-            fprintf(stdout, "\n");  // fflush(stdout);
+            fprintf(stdout, "\n");
         }
 
-        // all blocks ok
         frm_ok = (gpx->type == RD41) ? (err_rd41 & 0x7F) == 0 : (err_rd94 & 0x1F) == 0;
 
-        // JSON output // raw output ?
         if (gpx->option.jsn && frm_ok && !gpx->option.raw) {
             char *ver_jsn = NULL;
             char id_str[10+1] = {0};
-            //if (gpx->id > 0)  // ? 0 -> "000000000"
             {
                 sprintf(id_str, "%09d", gpx->id);
             }
@@ -1289,20 +1194,17 @@ static void print_frame(gpx_t *gpx) {
             if (gpx->type == RD94) fprintf(stdout, ", \"datetime\": \"%04d-%02d-%02dT%02d:%02d:%02d.%03dZ\"", gpx->jahr, gpx->monat, gpx->tag, gpx->std, gpx->min, gpx->sek, gpx->ms);
             else fprintf(stdout, ", \"datetime\": \"%02d:%02d:%02d.%02dZ\"", gpx->std, gpx->min, gpx->sek, gpx->cs);
             fprintf(stdout, ", \"lat\": %.5f, \"lon\": %.5f, \"alt\": %.5f, \"vel_h\": %.5f, \"heading\": %.5f, \"vel_v\": %.5f, \"sats\": %d", gpx->lat, gpx->lon, gpx->alt, gpx->vH, gpx->vD, gpx->vV, gpx->sats );
-            //if (!err_ptu)
             {
                 if (gpx->T  > -273.0) fprintf(stdout, ", \"temp\": %.1f", gpx->T );
-                if (gpx->U1 > -0.5)   fprintf(stdout, ", \"humidity\": %.1f", gpx->U1 ); // gpx->U1 <-> gpx->U2
+                if (gpx->U1 > -0.5)   fprintf(stdout, ", \"humidity\": %.1f", gpx->U1 );
                 if (gpx->P  > 0.0)    fprintf(stdout, ", \"pressure\": %.2f", gpx->P );
             }
-            //fprintf(stdout, ", \"subtype\": \"%s\"", rs_typ_str);
             if (gpx->jsn_freq > 0) {
                 fprintf(stdout, ", \"freq\": %d", gpx->jsn_freq);
             }
 
-            // Reference time/position
-            fprintf(stdout, ", \"ref_datetime\": \"%s\"", (gpx->type == RD94) ? "GPS" : "UTC" ); // {"GPS", "UTC"} GPS-UTC=leap_sec
-            fprintf(stdout, ", \"ref_position\": \"%s\"", (gpx->type == RD94) ? "GPS" : "MSL" ); // {"GPS", "MSL"} GPS=ellipsoid , MSL=geoid
+            fprintf(stdout, ", \"ref_datetime\": \"%s\"", (gpx->type == RD94) ? "GPS" : "UTC" );
+            fprintf(stdout, ", \"ref_position\": \"%s\"", (gpx->type == RD94) ? "GPS" : "MSL" );
 
             #ifdef VER_JSN_STR
                 ver_jsn = VER_JSN_STR;
@@ -1375,31 +1277,30 @@ int main(int argc, char **argv) {
         else if (strcmp(*argv, "-i") == 0) {
             gpx.option.inv = 1;
         }
-        else if (strcmp(*argv, "--rawhex") == 0) { rawin = 2; } //--inbytes // rawbytes input
+        else if (strcmp(*argv, "--rawhex") == 0) { rawin = 2; }
         else if (strcmp(*argv, "--rd41") == 0) { gpx.type = RD41; }
         else if (strcmp(*argv, "--rd94") == 0) { gpx.type = RD94; }
         else if (strcmp(*argv, "--json") == 0) { gpx.option.jsn = 1; }
         else if (strcmp(*argv, "--jsn_cfq") == 0) {
-            int frq = -1;  // center frequency / Hz
+            int frq = -1;
             ++argv;
             if (*argv) frq = atoi(*argv); else return -1;
             if (frq < 300000000) frq = -1;
             cfreq = frq;
         }
         else if (strcmp(*argv, "-b" ) == 0) { option_b = 1; }
-        //else if (strcmp(*argv, "-b2") == 0) { option_b = 2; }
         else if (strcmp(*argv, "--br") == 0) {
             ++argv;
             if (*argv) {
-                baudrate = atof(*argv);                // default: 4800
+                baudrate = atof(*argv);
                 if (baudrate < 4700 || baudrate > 4900) baudrate = 4800;
             }
             else return -1;
         }
-        else if   (strcmp(*argv, "--softin") == 0)  { option_softin = 1; }  // float32 soft input
-        else if   (strcmp(*argv, "--softinv") == 0) { option_softin = 2; }  // float32 inverted soft input
-        else if   (strcmp(*argv, "--iq0") == 0) { option_iq = 1; }  // complex IQ input, FM-discriminate internally
-        else if   (strcmp(*argv, "--IQ") == 0) { // baseband rotation, like rs41mod: S(t) -> S(t)*exp(-f*2pi*I*t)
+        else if   (strcmp(*argv, "--softin") == 0)  { option_softin = 1; }
+        else if   (strcmp(*argv, "--softinv") == 0) { option_softin = 2; }
+        else if   (strcmp(*argv, "--iq0") == 0) { option_iq = 1; }
+        else if   (strcmp(*argv, "--IQ") == 0) {
             double fq = 0.0;
             ++argv;
             if (*argv) fq = atof(*argv); else return -1;
@@ -1408,7 +1309,6 @@ int main(int argc, char **argv) {
             iq_xlt_fq = -fq;
         }
         else if (strcmp(*argv, "-") == 0) {
-            // raw headerless PCM on stdin: "- <sample_rate> <bits>"
             fp = stdin;
             fileloaded = 1;
             option_pcmraw = 1;
@@ -1436,7 +1336,7 @@ int main(int argc, char **argv) {
         gpx.auto_type = 1;
     }
 
-    if (cfreq > 0) gpx.jsn_freq = (cfreq+500)/1000; // kHz
+    if (cfreq > 0) gpx.jsn_freq = (cfreq+500)/1000;
 
     if (!rawin) {
 
@@ -1463,10 +1363,8 @@ int main(int argc, char **argv) {
                 }
                 else {
                     gpx.frame_rawbits[pos] = 0x30+bit;
-                    //printf("%d", bit);
                     pos++;
                     if (pos == RAWBITFRAME_LEN) {
-                        //frames++;
                         print_bitframe(&gpx, pos);
                         header_found = 0;
                         pos = HEADLEN;
@@ -1504,13 +1402,8 @@ int main(int argc, char **argv) {
 
             while (!read_bits_fsk(&gpx, fp, &bit, &len)) {
 
-                if (len == 0) { // reset_frame();
-                /*  if (pos > 2*BITS*pos_GPSV) {
-                        print_bitframe(&gpx, pos);
-                        pos = HEADLEN;
-                        header_found = 0;
-                    } */
-                    continue;   // ...
+                if (len == 0) {
+                    continue;
                 }
 
                 for (i = 0; i < len; i++) {
@@ -1523,10 +1416,8 @@ int main(int argc, char **argv) {
                     }
                     else {
                         gpx.frame_rawbits[pos] = 0x30+bit;
-                        //printf("%d", bit);
                         pos++;
                         if (pos == RAWBITFRAME_LEN) {
-                            //frames++;
                             print_bitframe(&gpx, pos);
                             header_found = 0;
                             pos = HEADLEN;
@@ -1538,13 +1429,11 @@ int main(int argc, char **argv) {
                     while ( pos < RAWBITFRAME_LEN ) {
                         if (read_rawbit(&gpx, fp, &bit) == EOF) break;
                         gpx.frame_rawbits[pos] = 0x30+bit;
-                        //printf("%d", bit);
                         pos++;
 
                         inc_bufpos();
                         buf[bufpos] = 0x30+bit;
                     }
-                    //frames++;
                     print_bitframe(&gpx, pos);
                     header_found = 0;
                     pos = HEADLEN;
@@ -1552,17 +1441,17 @@ int main(int argc, char **argv) {
             }
         }
     }
-    else {  // input: hexraw bytes
-        while (1 > 0) {              // rawin=2: 2chars->1byte
+    else {
+        while (1 > 0) {
             pbuf = fgets(gpx.frame_rawbits, rawin*FRAME_LEN+4, fp);
             if (pbuf == NULL) break;
             gpx.frame_rawbits[rawin*FRAME_LEN+1] = '\0';
             len = strlen(gpx.frame_rawbits) / rawin;
-            for (i = 0; i < len; i++) { //%2x  SCNx8=%hhx(inttypes.h)
+            for (i = 0; i < len; i++) {
                 sscanf(gpx.frame_rawbits+rawin*i, "%2hhx", gpx.frame_bytes+i);
             }
             for (i = len; i < FRAME_LEN; i++) gpx.frame_bytes[i] = 0x00;
-            if (gpx.frame_bytes[0] == 0xFC  &&  gpx.frame_bytes[1] == 0x1D) { // Header: 1A CF FC 1D
+            if (gpx.frame_bytes[0] == 0xFC  &&  gpx.frame_bytes[1] == 0x1D) {
                 print_frame(&gpx);
             }
         }
