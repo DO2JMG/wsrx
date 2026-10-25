@@ -1,3 +1,9 @@
+Version 0.1.11
+- The web interface will notify you when an update is available.
+- Windsond S1 decoder tested with a real radiosonde.
+- Bug fixed (S1 Decoder)
+- More information is sent to wettersonde.net (RS41: Mainboard, Firmware and TX-Power)
+
 Version 0.1.10 
 - Optionally, you can use a GPS receiver
 - Your location is displayed on the map
