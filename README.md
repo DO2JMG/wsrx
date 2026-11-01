@@ -39,7 +39,7 @@ What this software can do!
 | Vaisala      | RD41/RD94      | ✅       | ✅          | ✅       | ✅    |
 | Graw         | DFM09/17        | ✅       | ✅          | ❌       | ❌               |
 | Meteomodem   | M10                | ✅       | ✅          | ✅       | Not Sent         |
-| Meteomodem   | M20                | ✅       | ❌          | ❌       | Not Sent         |
+| Meteomodem   | M20                | ✅       | ✅          | ✅       | ✅        |
 | InterMet     | iMet-4             | ✅       | ✅          | ✅       | ✅               |
 | Meisei       | iMS-100    | ✅       | ✅          | ✅       | ❌               |
 | Meteolabor   | SRS-C50      | ✅       | ✅          | ✅       | ❌               |
